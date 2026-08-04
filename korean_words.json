@@ -1,0 +1,41 @@
+{
+  "words": [
+    {"id": "w1", "surface": "물", "definitions": ["water; one of the four elements in the story."], "pos": "noun", "type": "native", "grammar_notes": "A common noun for water.", "hanja": null},
+    {"id": "w2", "surface": "워터", "definitions": ["(loanword) water; English word for water, used for clarification."], "pos": "noun", "type": "loanword", "grammar_notes": "Borrowed from English 'water'.", "hanja": null},
+    {"id": "w3", "surface": "흙", "definitions": ["earth, soil; one of the four elements."], "pos": "noun", "type": "native"},
+    {"id": "w4", "surface": "어스", "definitions": ["(loanword) earth; English word for earth, used for clarification."], "pos": "noun", "type": "loanword"},
+    {"id": "w5", "surface": "불", "definitions": ["fire; one of the four elements."], "pos": "noun", "type": "native"},
+    {"id": "w6", "surface": "파이어", "definitions": ["(loanword) fire; English word for fire, used for clarification."], "pos": "noun", "type": "loanword"},
+    {"id": "w7", "surface": "공기", "definitions": ["air; one of the four elements."], "pos": "noun", "type": "native"},
+    {"id": "w8", "surface": "에어", "definitions": ["(loanword) air; English word for air, used for clarification."], "pos": "noun", "type": "loanword"},
+    {"id": "w9", "surface": "할머니", "definitions": ["grandmother; an elderly female family member."], "pos": "noun", "type": "native"},
+    {"id": "w10", "surface": "평화롭다", "definitions": ["to be peaceful; describes a state of peace."], "pos": "adjective", "type": "native", "grammar_notes": "Descriptive verb (adjective). Base form is 평화롭 (pyeonghwarop)."},
+    {"id": "w11", "surface": "과거", "definitions": ["the past; previous times."], "pos": "noun", "type": "sino-korean"},
+    {"id": "w12", "surface": "얘기", "definitions": ["story, talk; a spoken or written account."], "pos": "noun", "type": "native", "grammar_notes": "Short form of 이야기 (iyagi)."},
+    {"id": "w13", "surface": "자주", "definitions": ["often; with frequency."], "pos": "adverb", "type": "native"},
+    {"id": "w14", "surface": "하다", "definitions": ["to do; a common verb used to indicate action or state."], "pos": "verb", "type": "native", "grammar_notes": "A very common auxiliary and main verb. Conjugates in many ways."},
+    {"id": "w15", "surface": "그때는", "base": "그때", "conjugation": {"ending": "는", "explanation": "topic particle (은/는) attached to '그때' (that time)"}, "definitions": ["as for that time; at that time (topic)", "that time (base form)"], "pos": "noun + particle", "type": "native", "grammar_notes": "그때 (that time/then) + 는 (topic marker)."},
+    {"id": "w16", "surface": "절대", "definitions": ["never; absolutely (used for emphasis, often with negatives)."], "pos": "adverb", "type": "sino-korean"},
+    {"id": "w17", "surface": "영웅", "definitions": ["hero; a person admired for courage or noble qualities."], "pos": "noun", "type": "sino-korean"},
+    {"id": "w18", "surface": "아바타", "definitions": ["Avatar; the main character, a being who can master all elements.", "avatar (general): an incarnation or representation."], "pos": "noun", "type": "loanword", "grammar_notes": "Proper noun in this context."},
+    {"id": "w19", "surface": "물의", "base": "물", "conjugation": {"ending": "의", "explanation": "possessive particle (of)"}, "definitions": ["of water; water's (possessive)", "water (base form)"], "pos": "noun + particle", "type": "native", "grammar_notes": "물 (water) + 의 (possessive marker)."},
+    {"id": "w20", "surface": "부족", "definitions": ["tribe; a group of people, often used for the Water Tribe in the story.", "lack, shortage (other meaning, not used here)"], "pos": "noun", "type": "sino-korean"},
+    {"id": "w21", "surface": "한국", "definitions": ["Korea (South Korea)."], "pos": "noun", "type": "sino-korean", "grammar_notes": "Refers to the Republic of Korea.", "hanja": "韓國"}
+  ],
+  "sentences": [
+    {"id": "s1", "text": "물, 워터", "words": ["w1", "w2"]},
+    {"id": "s2", "text": "흙, 어스", "words": ["w3", "w4"]},
+    {"id": "s3", "text": "불, 파이어", "words": ["w5", "w6"]},
+    {"id": "s4", "text": "공기, 에어", "words": ["w7", "w8"]},
+    {
+      "id": "s5",
+      "text": "할머니는 평화로웠던 과거 얘기를 자주 하세요",
+      "words": ["w9", "w10", "w11", "w12", "w13", "w14"]
+    },
+    {
+      "id": "s6",
+      "text": "그때는 절대 영웅 아바타가 물의 부족과 흙의 왕국",
+      "words": ["w15", "w16", "w17", "w18", "w19", "w20"]
+    }
+  ]
+}

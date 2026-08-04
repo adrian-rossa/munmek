@@ -1,0 +1,13 @@
+{
+  // ...existing code...
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Extension",
+      "type": "shell",
+      "command": "echo No build step required for basic JS extension.",
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Munmek - context based AI Word Lookup",
+  "version": "1.1",
+  "description": "Shows AI-powered definitions for hovered (Korean) words (Shift key) using context from the sentence or an uploaded subtitle file.",
+  "permissions": ["scripting", "activeTab", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/"
+  ],
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
