@@ -2,62 +2,123 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Korean Lookup Options</title>
+  <title>Munmek Settings</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: #f4f7f6; color: #333; }
-    h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
-    .container { background-color: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-    label { display: block; margin-top: 20px; margin-bottom: 8px; font-weight: bold; color: #34495e; }
-    input[type="text"], input[type="password"], input[type="file"], textarea {
-      width: calc(100% - 24px); /* Account for padding */
-      padding: 12px;
-      margin-bottom: 15px;
-      border: 1px solid #bdc3c7;
-      border-radius: 4px;
-      box-sizing: border-box;
-      font-size: 16px;
+    :root {
+      color-scheme: light;
+      --bg: #f3efe7;
+      --panel: #fffdf8;
+      --ink: #1e1b16;
+      --muted: #6c6458;
+      --line: #ddd3c4;
+      --accent: #2f5d62;
+      --accent-soft: #e4f0ee;
     }
-    textarea { min-height: 150px; resize: vertical; }
+    body { font-family: Georgia, 'Times New Roman', serif; margin: 0; background: linear-gradient(180deg, #efe8dc 0%, #f7f3ed 100%); color: var(--ink); }
+    .container { max-width: 860px; margin: 0 auto; padding: 32px 20px 48px; }
+    .hero { background: linear-gradient(135deg, #17383b, #305f63); color: white; padding: 28px; border-radius: 24px; box-shadow: 0 16px 45px rgba(23, 56, 59, 0.18); }
+    .hero h1 { margin: 0 0 10px; font-size: 2rem; letter-spacing: 0.01em; }
+    .hero p { margin: 0; max-width: 62ch; color: rgba(255,255,255,0.88); line-height: 1.6; }
+    .grid { display: grid; gap: 18px; grid-template-columns: 1fr; margin-top: 20px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 22px; box-shadow: 0 8px 28px rgba(31, 24, 14, 0.06); }
+    h2 { margin: 0 0 12px; font-size: 1.1rem; }
+    label { display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 700; }
+    input[type="text"], input[type="password"], textarea {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-sizing: border-box;
+      font-size: 15px;
+      background: #fff;
+      color: var(--ink);
+    }
+    textarea { min-height: 150px; resize: vertical; line-height: 1.5; }
+    .hint { font-size: 0.9rem; color: var(--muted); line-height: 1.5; margin-top: 8px; }
+    .inline-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-top: 20px; flex-wrap: wrap; }
     button {
-      padding: 12px 20px;
-      background-color: #3498db;
+      padding: 12px 18px;
+      background: var(--accent);
       color: white;
       border: none;
-      border-radius: 4px;
+      border-radius: 999px;
       cursor: pointer;
-      font-size: 16px;
-      transition: background-color 0.3s ease;
+      font-size: 15px;
+      font-weight: 700;
     }
-    button:hover { background-color: #2980b9; }
-    #status { margin-top: 25px; font-weight: bold; padding: 10px; border-radius: 4px; text-align: center; }
-    .success { background-color: #e8f5e9; color: #2e7d32; }
-    .error { background-color: #ffebee; color: #c62828; }
-    #srtFileInfo { font-size: 0.9em; color: #7f8c8d; margin-top: -10px; margin-bottom: 15px; }
-    .prompt-variables { font-size: 0.85em; color: #555; margin-bottom: 10px; background-color: #ecf0f1; padding: 8px; border-radius: 3px; }
+    button:hover { filter: brightness(1.05); }
+    #status { margin-top: 14px; font-weight: 700; }
+    .success { color: #1c6b39; }
+    .error { color: #b3261e; }
+    .small { font-size: 0.86rem; color: var(--muted); }
+    code { background: var(--accent-soft); padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Korean Lookup Extension Settings</h1>
-
-    <label for="apiKey">Gemini API Key:</label>
-    <input type="password" id="apiKey" placeholder="Enter your Gemini API Key">
-
-    <label for="modelId">Gemini Model ID:</label>
-    <input type="text" id="modelId" placeholder="e.g., gemini-pro, gemini-1.5-flash-latest">
-
-    <label for="srtFile">Upload SRT Subtitle File (Optional):</label>
-    <input type="file" id="srtFile" accept=".srt">
-    <div id="srtFileInfo">No SRT file currently loaded.</div>
-
-    <label for="aiPrompt">Custom AI Prompt:</label>
-    <div class="prompt-variables">
-      Available variables: <code>{WORD}</code>, <code>{SENTENCE}</code>, <code>{PREV_SENTENCE}</code>, <code>{NEXT_SENTENCE}</code>
+    <div class="hero">
+      <h1>Munmek Settings</h1>
+      <p>Keep the lookup focused on Korean. Munmek reads a local packaged dictionary first, then can ask Gemini for richer grammar or translation help on demand, and can export cards to AnkiConnect.</p>
     </div>
-    <textarea id="aiPrompt" placeholder="Define how the AI should process the text and the desired JSON output structure..."></textarea>
 
-    <button id="save">Save Settings</button>
+    <div class="grid">
+      <section class="card">
+        <h2>Gemini</h2>
+        <div class="inline-grid">
+          <div>
+            <label for="apiKey">API Key</label>
+            <input type="password" id="apiKey" placeholder="Enter your Gemini API key">
+          </div>
+          <div>
+            <label for="modelId">Model ID</label>
+            <input type="text" id="modelId" placeholder="gemini-2.0-flash-lite">
+          </div>
+        </div>
+
+        <label for="aiPrompt">Editable Prompt</label>
+        <div class="hint">Useful placeholders: <code>{WORD}</code>, <code>{SENTENCE}</code>, <code>{PREV_SENTENCE}</code>, <code>{NEXT_SENTENCE}</code>, <code>{DICTIONARY_ENTRY}</code>.</div>
+        <textarea id="aiPrompt" placeholder="Add your own style and constraints here."></textarea>
+      </section>
+
+      <section class="card">
+        <h2>AnkiConnect</h2>
+        <div class="inline-grid">
+          <div>
+            <label for="ankiConnectUrl">AnkiConnect URL</label>
+            <input type="text" id="ankiConnectUrl" placeholder="http://127.0.0.1:8765">
+          </div>
+          <div>
+            <label for="ankiDeckName">Target Deck</label>
+            <input type="text" id="ankiDeckName" placeholder="Korean">
+          </div>
+          <div>
+            <label for="ankiNoteType">Note Type</label>
+            <input type="text" id="ankiNoteType" placeholder="Basic">
+          </div>
+          <div>
+            <label for="ankiDefinitionField">Definition Field</label>
+            <input type="text" id="ankiDefinitionField" placeholder="Back">
+          </div>
+        </div>
+
+        <label for="ankiFieldMapping">Field Mapping JSON</label>
+        <div class="hint">Map Anki field names to templates. Example: <code>{"Front":"{{word}}","Back":"{{definition}}"}</code></div>
+        <textarea id="ankiFieldMapping" spellcheck="false"></textarea>
+
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-top:14px;">
+          <input type="checkbox" id="ankiUpdateLastCard" style="width:auto;">
+          Update the last created card instead of creating a new one
+        </label>
+      </section>
+    </div>
+
+    <div class="toolbar">
+      <button id="save">Save Settings</button>
+      <button id="reset" type="button" style="background:#6c6458;">Reset to Defaults</button>
+    </div>
     <div id="status"></div>
+    <p class="small">The packaged sample dictionary lives in <code>korean_words.json</code>. Expand that file or replace it with a fuller dataset as the lookup pipeline evolves.</p>
   </div>
 
   <script src="options.js"></script>

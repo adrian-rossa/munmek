@@ -1,552 +1,851 @@
-// Content script: Detects hovered word and sentence, sends for AI processing
-let hoveredWord = ''; // Keep for potential direct use, though AI might refine
-let hoveredSentence = ''; // Keep for potential direct use
+const DICTIONARY_URL = chrome.runtime.getURL('korean_words.json');
+const HIDE_DELAY_MS = 220;
+const TOOLTIP_ID = 'munmek-tooltip';
+const STYLE_ID = 'munmek-tooltip-style';
 
-// Tooltip logic for in-page word lookup
+const sentenceAnalysisCache = new Map();
+const pendingAnalysisRequests = new Map();
+
+let dictionaryEntries = [];
+let dictionaryIndex = { bySurface: new Map(), byBase: new Map() };
+let dictionaryReady = false;
+let dictionaryLoadError = '';
+
 let tooltip = null;
-// let wordData = null; // Replaced by AI response
-let srtData = null; // stores parsed SRT from background
-let srtFileName = null;
-let currentSrtMatchDetails = null; // To store {srtSentence, prevSrtSentence, nextSrtSentence, srtEntry}
+let hideTimer = null;
+let currentHoverState = null;
+let lastHoverSignature = '';
+let lastTooltipPosition = { x: 0, y: 0 };
 
-let currentSentenceAIAnalysis = null; // To store the full AI analysis for the current sentence
+function init() {
+  injectTooltipStyles();
+  loadDictionary();
+  attachHoverListeners(document);
+  observeShadowRoots();
+}
 
-let dataLoadingError = null; // Used for AI/SRT/config loading errors
-let showDebugOutput = true; // Variable to control debug output visibility, true for easier debugging -> for future: make this an option in the settings
+if (document.body) {
+  init();
+} else {
+  document.addEventListener('DOMContentLoaded', init, { once: true });
+}
 
-// Request SRT data from background script when content script loads
-chrome.runtime.sendMessage({ type: 'getSrtData' }, (response) => {
-  if (chrome.runtime.lastError) {
-    dataLoadingError = `Error contacting background script: ${chrome.runtime.lastError.message}`;
-    console.error(' Error loading SRT data (runtime):', dataLoadingError);
+function injectTooltipStyles() {
+  if (document.getElementById(STYLE_ID)) {
     return;
   }
-  if (response) {
-    if (response.srtData && response.srtData.length > 0) {
-      srtData = response.srtData;
-      srtFileName = response.srtFileName;
-      console.log(` SRT data loaded: ${srtFileName} (${srtData.length} entries)`);
-      dataLoadingError = null; // Clear previous errors if any
-    } else if (response.error) {
-      dataLoadingError = `Error loading SRT from storage: ${response.error}`;
-      console.error('Error loading SRT data (storage):', dataLoadingError);
-    } else {
-      dataLoadingError = response.message || 'SRT data not found or empty. Please upload an SRT file via extension options.';
-      console.warn(' SRT data not available:', dataLoadingError);
+
+  const style = document.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = `
+    #${TOOLTIP_ID}.munmek-tooltip {
+      position: fixed;
+      z-index: 2147483647;
+      display: none;
+      width: min(440px, calc(100vw - 24px));
+      max-height: min(72vh, 760px);
+      overflow: auto;
+      box-sizing: border-box;
+      padding: 16px;
+      border: 1px solid #ddd3c4;
+      border-radius: 18px;
+      background: #fffdf8;
+      color: #1e1b16;
+      box-shadow: 0 18px 55px rgba(23, 56, 59, 0.2);
+      font-family: Georgia, 'Times New Roman', serif;
+      line-height: 1.5;
+      user-select: text;
     }
-  } else {
-    dataLoadingError = "No response from background script when fetching SRT data.";
-    console.error('No response from getSrtdata function', dataLoadingError);
-  }
-});
 
+    #${TOOLTIP_ID} .title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: #17383b;
+    }
 
-// function to extract word and sentence from a given range (when hovering over)
-function extractWordAndSentenceFromRange(range) {
-  if (!range) return null;
-  const node = range.startContainer; //get the DOM node containing the text
-  if (!node || node.nodeType !== Node.TEXT_NODE || !node.textContent.trim()) return null; //make sure the node is Text
+    #${TOOLTIP_ID} .subtitle {
+      color: #6c6458;
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+    }
 
-  const textContent = node.textContent;
-  const offset = range.startOffset; //offset where in the node the range starts/cursor is
+    #${TOOLTIP_ID} .section {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #ece2d4;
+    }
 
-  // (Korean-aware) word boundary regex (includes Hangul syllables, Jamo, compatibility Jamo, numbers, Latin letters)
-  const WordChar = '[\\p{L}\\p{N}\\uAC00-\\uD7AF\\u1100-\\u11FF\\u3130-\\u318F]';
-  const nonWordCharOrBoundary = `(?<!${WordChar})|(?!=${WordChar})`;
-  //expand from offset to find boundaries of word
-  let wordLeft = offset;
-  while (wordLeft > 0 && textContent[wordLeft - 1].match(new RegExp(WordChar, 'u'))) {
-    wordLeft--;
-  }
+    #${TOOLTIP_ID} .section:first-of-type {
+      margin-top: 0;
+      padding-top: 0;
+      border-top: 0;
+    }
 
-  let wordRight = offset;
-  while (wordRight < textContent.length && textContent[wordRight].match(new RegExp(WordChar, 'u'))) {
-    wordRight++;
-  }
-  
-  const word = textContent.slice(wordLeft, wordRight).trim();
+    #${TOOLTIP_ID} .label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #7b7163;
+      margin-bottom: 6px;
+    }
 
-  if (!word) return null;
+    #${TOOLTIP_ID} .sentence {
+      font-size: 0.92rem;
+      color: #4f463a;
+      background: #f7f2ea;
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
 
-  // Sentence detection:
-  // For typical web pages could be more complex. In case of subtitles, the text node itself is often the sentence.
-  // We'll primarily use the node's textContent as the sentence, which is good for subtitles.
-  // More advanced sentence splitting for general text could be a TODO for the future.
-  let sentenceText = textContent.trim();
-  
-  // Attempt to get a slightly larger context if the node is part of a larger paragraph.
-  // might not always be perfect.
-  const parentElement = node.parentElement;
-  if (parentElement && parentElement.textContent.length > sentenceText.length && parentElement.textContent.length < 300) { // check for more text contained in the same parent node with a limit
-      const parentText = parentElement.textContent.trim().replace(/\s+/g, ' '); //normalize whitespace
-      if (parentText.includes(sentenceText)) {
-          // Try to find sentence boundaries around our current sentenceText within the parentText (simplified)
-          const sentenceEndChars = /[.!?。？！]/; //look out for sentence ending characters
-          let potentialSentenceStart = parentText.indexOf(sentenceText); //find where original text starts in parent
-          let actualStart = potentialSentenceStart;
-          for (let i = potentialSentenceStart - 1; i >= 0; i--) {
-              if (sentenceEndChars.test(parentText[i])) {
-                  actualStart = i + 1;
-                  break;
-              }
-              if (i === 0) actualStart = 0; //in case it hits the start of the parent node
-          }
-          
-          let potentialSentenceEnd = potentialSentenceStart + sentenceText.length;
-          let actualEnd = potentialSentenceEnd;
-          for (let i = potentialSentenceEnd; i < parentText.length; i++) {
-              if (sentenceEndChars.test(parentText[i])) {
-                  actualEnd = i + 1;
-                  break;
-              }
-              if (i === parentText.length -1) actualEnd = parentText.length;
-          }
-          sentenceText = parentText.substring(actualStart, actualEnd).trim();
-      }
-  }
+    #${TOOLTIP_ID} .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
 
+    #${TOOLTIP_ID} .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #e4f0ee;
+      color: #17383b;
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
 
-  return { word, sentenceText, node };
+    #${TOOLTIP_ID} .entry-box {
+      border: 1px solid #eadfce;
+      border-radius: 14px;
+      padding: 12px;
+      background: #fff;
+    }
+
+    #${TOOLTIP_ID} .entry-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    #${TOOLTIP_ID} .entry-word {
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+
+    #${TOOLTIP_ID} .entry-meta {
+      color: #6c6458;
+      font-size: 0.84rem;
+    }
+
+    #${TOOLTIP_ID} ul {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+
+    #${TOOLTIP_ID} li {
+      margin: 4px 0;
+    }
+
+    #${TOOLTIP_ID} .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    #${TOOLTIP_ID} button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 14px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    #${TOOLTIP_ID} .primary-button {
+      background: #2f5d62;
+      color: #fff;
+    }
+
+    #${TOOLTIP_ID} .secondary-button {
+      background: #e8e1d3;
+      color: #1e1b16;
+    }
+
+    #${TOOLTIP_ID} .feedback {
+      margin-top: 10px;
+      border-radius: 12px;
+      background: #f4f7f6;
+      padding: 10px 12px;
+      color: #35545c;
+      font-size: 0.9rem;
+    }
+
+    #${TOOLTIP_ID} .feedback.error {
+      background: #fff0f0;
+      color: #9a1f1f;
+    }
+
+    #${TOOLTIP_ID} .muted {
+      color: #7b7163;
+    }
+
+    #${TOOLTIP_ID} .empty {
+      color: #6c6458;
+      font-style: italic;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
-// Function to find matching SRT entry and its context
-function findSrtContext(webpageSentence) {
-  if (!srtData || srtData.length === 0 || !webpageSentence) {
-    return null;
-  }
-  // Normalize webpage sentence for matching (simple trim and space normalization)
-  const normalizedWebpageSentence = webpageSentence.trim().replace(/\s+/g, ' ');
-
-  for (let i = 0; i < srtData.length; i++) {
-    const srtEntryText = srtData[i].text.trim().replace(/\s+/g, ' ');
-    // Simple substring match. Consider more advanced matching if needed.
-    if (srtEntryText.includes(normalizedWebpageSentence) || normalizedWebpageSentence.includes(srtEntryText)) {
-      return {
-        srtSentence: srtData[i].text,
-        prevSrtSentence: i > 0 ? srtData[i-1].text : null,
-        nextSrtSentence: i < srtData.length - 1 ? srtData[i+1].text : null,
-        srtEntry: srtData[i] // The full SRT entry object
-      };
-    }
-  }
-  return null; // No match found
-}
-
-function showTooltip(x, y, currentHoveredWord, currentWebpageSentence, aiAnalysisResult) {
-  if (!tooltip) {
-    tooltip = document.createElement('div');
-    tooltip.style.position = 'fixed';
-    tooltip.style.zIndex = '2147483647'; // Max z-index
-    tooltip.style.background = 'rgba(255, 255, 255, 0.98)';
-    tooltip.style.border = '1px solid #ccc';
-    tooltip.style.borderRadius = '8px';
-    tooltip.style.boxShadow = '0 5px 15px rgba(0,0,0,0.2)';
-    tooltip.style.padding = '15px';
-    tooltip.style.fontSize = '16px';
-    tooltip.style.maxWidth = '500px';
-    tooltip.style.minWidth = '300px';
-    tooltip.style.pointerEvents = 'auto'; // Allow interaction with tooltip content if needed
-    tooltip.style.fontFamily = '\'Segoe UI\', \'Malgun Gothic\', sans-serif';
-    tooltip.style.lineHeight = '1.6';
-    document.body.appendChild(tooltip);
-  }
-
-  let contentHtml = "";
-  const normalizedWordForDisplay = currentHoveredWord ? currentHoveredWord.trim().normalize() : "";
-
-  contentHtml += `<div style='font-size: 24px; font-weight: bold; margin-bottom: 12px; color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 8px;'>${normalizedWordForDisplay || "..."}</div>`;
-  
-  if (currentWebpageSentence) {
-      contentHtml += `<div style='font-size: 0.9em; color: #555; margin-bottom: 8px; font-style: italic;'>Source: "${currentWebpageSentence.substring(0, 70)}${currentWebpageSentence.length > 70 ? '...' : ''}"</div>`;
-  }
-  if (currentSrtMatchDetails && currentSrtMatchDetails.srtSentence) {
-      contentHtml += `<div style='font-size: 0.85em; color: #3498db; margin-bottom: 12px; background-color: #eaf5ff; padding: 6px 8px; border-radius: 4px;'>SRT: "${currentSrtMatchDetails.srtSentence.substring(0,70)}${currentSrtMatchDetails.srtSentence.length > 70 ? '...' : ''}"</div>`;
-  }
-
-  if (dataLoadingError) { // For SRT/config errors (checked before AI call usually)
-    contentHtml += `<div style='color:red; margin-top:10px; padding: 8px; background-color: #ffebee; border-radius: 4px;'><strong>Configuration/Data Error:</strong><br>${dataLoadingError}</div>`;
-  } else if (aiAnalysisResult && aiAnalysisResult.error) {
-    contentHtml += `<div style='color:red; margin-top:10px; padding: 8px; background-color: #ffebee; border-radius: 4px;'><strong>AI Error:</strong> ${aiAnalysisResult.error}</div>`;
-    if (aiAnalysisResult.rawResponse) {
-        contentHtml += `<div style='font-size:0.8em; color: #444; margin-top:5px; max-height: 100px; overflow-y: auto; border: 1px solid #fdd; padding: 5px; background-color: #fff9f9;'>Raw: ${aiAnalysisResult.rawResponse.substring(0,300)}...\</div>`;
-    }
-     if (aiAnalysisResult.details) {
-        contentHtml += `<div style='font-size:0.8em; color: #444; margin-top:5px; max-height: 100px; overflow-y: auto; border: 1px solid #fdd; padding: 5px; background-color: #fff9f9;'>Details: ${typeof aiAnalysisResult.details === 'string' ? aiAnalysisResult.details.substring(0,300) : JSON.stringify(aiAnalysisResult.details).substring(0,300)}...\</div>`;
-    }
-  } else if (currentSentenceAIAnalysis && currentSentenceAIAnalysis.words_analysis) { // Check stored analysis
-    const wordsAnalysis = currentSentenceAIAnalysis.words_analysis;
-    let matchedEntry = null;
-
-    if (normalizedWordForDisplay) {
-      matchedEntry = wordsAnalysis.find(entry => entry.surface.trim().normalize() === normalizedWordForDisplay);
+async function loadDictionary() {
+  try {
+    const response = await fetch(DICTIONARY_URL);
+    if (!response.ok) {
+      throw new Error(`Dictionary load failed: ${response.status} ${response.statusText}`);
     }
 
-    console.log("[KoreanDict] Matched entry in showTooltip:", matchedEntry);
-
-    if (matchedEntry) {
-      const entry = matchedEntry; // Use the single matched entry
-      contentHtml += `<div style='margin-bottom: 18px; padding: 12px; border-radius: 6px; background-color: #f8f9fa; border: 1px solid #3498db;'>`;
-      
-      // Surface and Base form
-      contentHtml += `<div style='font-size: 1.2em; font-weight: bold; color: #333; margin-bottom: 5px;'>${entry.surface}`;
-      if (entry.base && entry.base !== entry.surface) {
-          contentHtml += ` <span style="font-size:0.9em; color: #555;">(Base: ${entry.base})</span>`;
-      }
-      contentHtml += `</div>`;
-
-      // Part of Speech (POS)
-      if (entry.pos) {
-        contentHtml += `<div style='margin-bottom: 6px; font-size: 0.9em;'><span style='background-color: #e0f2fe; color: #0c5460; padding: 3px 8px; border-radius: 12px; font-size: 0.9em;'>${entry.pos}</span></div>`;
-      }
-
-      // Word Type (Native, Sino-Korean, Loanword)
-      if (entry.type) {
-        contentHtml += `<div style='margin-bottom: 6px; font-size: 0.9em;'><span style='background-color: #e6f7ff; color: #0050b3; padding: 3px 8px; border-radius: 12px; font-size: 0.9em;'>Type: ${entry.type}</span></div>`;
-      }
-      
-      // Hanja
-      if (entry.hanja) {
-        contentHtml += `<div style='margin-bottom: 8px; font-size: 1em; color: #333;'><strong>Hanja:</strong> ${entry.hanja}</div>`;
-      }
-
-      // Definitions
-      let defs = entry.definitions || [];
-      if (defs.length > 0) {
-        contentHtml += `<div style='margin-bottom: 8px;'>`;
-        contentHtml += `<strong style='color: #333; font-size: 0.95em;'>Definitions:</strong>`;
-        contentHtml += `<ul style='list-style: disc; margin-left: 20px; padding-left: 0; margin-bottom: 0; font-size: 0.95em; color: #111;'>`; // Darker color for definitions
-        contentHtml += defs.map(d => `<li style='margin-bottom: 4px;'>${d}</li>`).join('');
-        contentHtml += `</ul></div>`;
-      }
-
-      // Conjugation
-      if (entry.conjugation && (entry.conjugation.ending || entry.conjugation.form || entry.conjugation.explanation)) {
-        contentHtml += `<div style='color: #444; font-size: 0.9em; margin-bottom: 5px; padding-top: 8px; border-top: 1px dashed #e0e0e0;'>`;
-        contentHtml += `<strong>Conjugation/Form:</strong>`;
-        if (entry.conjugation.form) contentHtml += ` ${entry.conjugation.form}`;
-        if (entry.conjugation.ending) contentHtml += ` (Ending: ${entry.conjugation.ending})`;
-        if (entry.conjugation.explanation) contentHtml += ` <span style='color: #555; font-size: 0.95em;'>(${entry.conjugation.explanation})</span>`;
-        contentHtml += `</div>`;
-      }
-      
-      // Grammar Notes
-      if (entry.grammar_notes) {
-        contentHtml += `<div style='color: #444; font-size: 0.9em; margin-top: 5px; padding-top: 8px; border-top: 1px dashed #e0e0e0; line-height: 1.4;'>`;
-        contentHtml += `<strong>Notes:</strong> <span style='white-space: pre-wrap;'>${entry.grammar_notes}</span></div>`;
-      }
-      contentHtml += `</div>`; // Close entry div
-    } else if (normalizedWordForDisplay) {
-      contentHtml += `<div style="color:#666; margin-top: 10px; font-style: italic; padding: 8px; background-color: #f9f9f9; border-radius: 4px;">No specific analysis found for "${normalizedWordForDisplay}" in the current sentence.</div>`;
-    } else {
-      contentHtml += '<div style="color:#666; margin-top: 10px; font-style: italic; padding: 8px; background-color: #f9f9f9; border-radius: 4px;">Hover over a specific word.</div>';
-    }
-  } else if (aiAnalysisResult && aiAnalysisResult.data && aiAnalysisResult.data.words_analysis) {
-    // This case might occur if currentSentenceAIAnalysis hasn't been set yet, but a fresh AI response came in.
-    // This is a fallback, ideally currentSentenceAIAnalysis is set first.
-    contentHtml += '<div style="color:#666; margin-top: 10px; font-style: italic; padding: 8px; background-color: #f9f9f9; border-radius: 4px;">Processing AI response...</div>';
-  } else {
-    contentHtml += '<div style="color:#666; margin-top: 10px; font-style: italic; padding: 8px; background-color: #f9f9f9; border-radius: 4px;">Waiting for AI analysis...</div>';
-  }
-  
-  if (showDebugOutput) {
-    let debugHtml = `<div style='margin-top: 15px; padding-top: 10px; border-top: 1px dashed #ccc; font-size: 0.8em; color: #333; max-height: 150px; overflow-y: auto;'>`;
-    debugHtml += `<div><b>Debug Info:</b></div>`;
-    debugHtml += `<div><b>Hovered Word:</b> \"${normalizedWordForDisplay || 'N/A'}\"</div>`;
-    debugHtml += `<div><b>Webpage Sentence:</b> \"${currentWebpageSentence || 'N/A'}\"</div>`;
-    if (currentSrtMatchDetails) {
-        debugHtml += `<div><b>SRT Current:</b> "${currentSrtMatchDetails.srtSentence}"</div>`;
-        debugHtml += `<div><b>SRT Prev:</b> "${currentSrtMatchDetails.prevSrtSentence || 'N/A'}"</div>`;
-        debugHtml += `<div><b>SRT Next:</b> "${currentSrtMatchDetails.nextSrtSentence || 'N/A'}"</div>`;
-    } else {
-        debugHtml += `<div><b>SRT Match:</b> Not found for webpage sentence.</div>`;
-    }
-    debugHtml += `</div>`;
-    contentHtml += debugHtml;
-  }
-
-  tooltip.innerHTML = contentHtml;
-
-  tooltip.style.visibility = 'hidden'; // Hide before calculating position
-  tooltip.style.display = 'block';
-  
-  const tooltipRect = tooltip.getBoundingClientRect();
-  const tooltipHeight = tooltipRect.height;
-  const tooltipWidth = tooltipRect.width;
-
-  let topPos = y + 20; // Default below cursor
-  let leftPos = x + 20; // Default right of cursor
-
-  // Adjust if tooltip goes off-screen
-  if (y + tooltipHeight + 20 > window.innerHeight) { // If overflows bottom
-    topPos = y - tooltipHeight - 20; // Position above cursor
-  }
-  if (topPos < 0) { // If still overflows top (or was initially too high)
-    topPos = 5; // Position at top of viewport
-  }
-  if (x + tooltipWidth + 20 > window.innerWidth) { // If overflows right
-    leftPos = x - tooltipWidth - 20; // Position left of cursor
-  }
-  if (leftPos < 0) { // If still overflows left
-    leftPos = 5; // Position at left of viewport
-  }
-
-  tooltip.style.left = leftPos + 'px';
-  tooltip.style.top = topPos + 'px';
-  tooltip.style.visibility = 'visible'; // Show after positioning
-}
-
-function hideTooltip() {
-  if (tooltip) tooltip.style.display = 'none';
-  // currentSrtMatchDetails = null; // Reset context when tooltip hides - might be too aggressive if mouse moves slightly
-}
-
-let lastRequestTime = 0;
-const requestDebounceTime = 300; // milliseconds debounce for AI requests
-let currentAIRequest = null; // To keep track of the last word/sentence sent to AI
-
-// Main mousemove listener (document level)
-document.addEventListener('mousemove', (e) => {
-  if (e.shiftKey) {
-    const range = document.caretRangeFromPoint(e.clientX, e.clientY);
-    const hoverContext = extractWordAndSentenceFromRange(range);
-    
-    if (hoverContext && hoverContext.word) {
-      const currentHoveredWord = hoverContext.word.trim().normalize();
-      const currentSentenceText = hoverContext.sentenceText.trim().normalize();
-      const requestKey = `${currentHoveredWord}|${currentSentenceText}`; // More specific key
-      const sentenceRequestKey = currentSentenceText; // Key for fetching/checking full sentence analysis
-
-      // If AI response for the current sentence is already stored, and we are just changing the hovered word
-      if (currentSentenceAIAnalysis && currentSentenceAIAnalysis.originalSentence === currentSentenceText) {
-        showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, null); // Pass null for aiAnalysisResult as we use stored
-        return;
-      }
-      
-      // If there's a general data loading error (SRT, config), show it and don't proceed to AI
-      if (dataLoadingError) {
-        showTooltip(e.clientX, e.clientY, hoverContext.word, hoverContext.sentenceText, { error: dataLoadingError });
-        return;
-      }
-
-      const currentTime = Date.now();
-      if (currentTime - lastRequestTime < requestDebounceTime && currentAIRequest === sentenceRequestKey) {
-        // Still debouncing for the same sentence, show tooltip with current word, using existing analysis if available
-        showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, null); 
-        return; 
-      }
-      
-      currentAIRequest = sentenceRequestKey; // Track requests by sentence
-      lastRequestTime = currentTime;
-
-      currentSrtMatchDetails = findSrtContext(hoverContext.sentenceText);
-      let prevSrt = null, nextSrt = null, currentSrtForAI = hoverContext.sentenceText;
-
-      if (currentSrtMatchDetails) {
-        currentSrtForAI = currentSrtMatchDetails.srtSentence; // Prefer SRT sentence for AI
-        prevSrt = currentSrtMatchDetails.prevSrtSentence;
-        nextSrt = currentSrtMatchDetails.nextSrtSentence;
-      }
-      
-      // Show tooltip immediately with "loading" state or existing data for the new word
-      showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, { data: { words_analysis: [] } }); 
-
-      chrome.runtime.sendMessage({
-        type: 'getAIDefinition',
-        data: {
-          word: hoverContext.word,
-          currentSentence: currentSrtForAI,
-          prevSentence: prevSrt,
-          nextSentence: nextSrt
-        }
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error("[KoreanDict] Runtime error sending/receiving message:", chrome.runtime.lastError);
-          currentSentenceAIAnalysis = null; // Clear stored analysis on error
-          showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, { error: `Extension error: ${chrome.runtime.lastError.message}` });
-          currentAIRequest = null; // Clear current request on error
-          return;
-        }
-        
-        console.log("[KoreanDict] Full AI Response Data:", response ? response.data : 'No response data');
-
-        // Store the full analysis linked to the sentence it was for
-        if (response && response.data && response.data.words_analysis) {
-            currentSentenceAIAnalysis = {
-                originalSentence: currentSentenceText, // Store which sentence this analysis belongs to
-                words_analysis: response.data.words_analysis
-            };
-        } else if (response && response.error) {
-            currentSentenceAIAnalysis = null; // Clear on error
-        }
-
-        // Only update if the response is for the current hovered word/sentence context
-        const latestHoverContext = extractWordAndSentenceFromRange(document.caretRangeFromPoint(e.clientX, e.clientY));
-        if (latestHoverContext && latestHoverContext.word.trim().normalize() === currentHoveredWord && latestHoverContext.sentenceText.trim().normalize() === currentSentenceText) {
-            showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, response); // Pass the fresh response for initial display
-        } else if (latestHoverContext && latestHoverContext.sentenceText.trim().normalize() === currentSentenceText) {
-            // Sentence is the same, but word changed while AI was processing. Show new word with current analysis.
-            showTooltip(e.clientX, e.clientY, latestHoverContext.word.trim().normalize(), currentSentenceText, null);
-        }
-
-        if (!response || response.error) {
-            currentAIRequest = null; // Clear current request if AI returned an error
-        }
-      });
-
-    } else { // No valid word/sentence under cursor
-      hideTooltip();
-      currentAIRequest = null;
-    }
-  } else { // Shift key not pressed
-    hideTooltip();
-    currentAIRequest = null;
-  }
-});
-
-// --- Shadow DOM support ---
-function addShadowDomListeners(root) {
-  if (!root || root._koreanLookupListenerAttached) return; // Check if already attached
-
-  root.addEventListener('mousemove', (e) => shadowDomMouseMoveHandler(e, root));
-  root._koreanLookupListenerAttached = true;
-}
-
-function shadowDomMouseMoveHandler(e, shadowRoot) {
-  if (e.shiftKey) {
-    // caretRangeFromPoint needs to be called on the document containing the point.
-    // For shadow DOM, this can be tricky. If the event target is inside shadow DOM,
-    // its ownerDocument might be the shadow root itself if it's a full document fragment,
-    // or we might need to use document.elementFromPoint and then check its shadowRoot.
-    
-    let range = null;
-    try {
-        // Try to get range from the document that owns the shadow root, or the main document
-        const doc = shadowRoot.ownerDocument || document;
-        if (doc.caretRangeFromPoint) {
-            range = doc.caretRangeFromPoint(e.clientX, e.clientY);
-        } else if (document.caretRangeFromPoint) { // Fallback to main document
-             range = document.caretRangeFromPoint(e.clientX, e.clientY);
-        }
-    } catch (err) {
-        console.warn("Error getting caretRangeFromPoint in shadow DOM:", err);
-        return;
-    }
-
-    const hoverContext = extractWordAndSentenceFromRange(range);
-    if (hoverContext && hoverContext.word) {
-      const currentHoveredWord = hoverContext.word.trim().normalize();
-      const currentSentenceText = hoverContext.sentenceText.trim().normalize();
-      const requestKey = `${currentHoveredWord}|${currentSentenceText}`;
-      const sentenceRequestKey = currentSentenceText;
-
-      // If AI response for the current sentence is already stored
-      if (currentSentenceAIAnalysis && currentSentenceAIAnalysis.originalSentence === currentSentenceText) {
-        showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, null);
-        return;
-      }
-
-      if (dataLoadingError) {
-        showTooltip(e.clientX, e.clientY, hoverContext.word, hoverContext.sentenceText, { error: dataLoadingError });
-        return;
-      }
-      
-      const currentTime = Date.now();
-      if (currentTime - lastRequestTime < requestDebounceTime && currentAIRequest === sentenceRequestKey) {
-        showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, null);
-        return;
-      }
-      
-      currentAIRequest = sentenceRequestKey; // Track requests by sentence
-      lastRequestTime = currentTime;
-
-      currentSrtMatchDetails = findSrtContext(hoverContext.sentenceText);
-      let prevSrt = null, nextSrt = null, currentSrtForAI = hoverContext.sentenceText;
-
-      if (currentSrtMatchDetails) {
-        currentSrtForAI = currentSrtMatchDetails.srtSentence;
-        prevSrt = currentSrtMatchDetails.prevSrtSentence;
-        nextSrt = currentSrtMatchDetails.nextSrtSentence;
-      }
-      
-      showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, { data: { words_analysis: [] } }); // Loading
-
-      chrome.runtime.sendMessage({
-        type: 'getAIDefinition',
-        data: {
-          word: currentHoveredWord, // Send the specific word, AI prompt might use it as a hint
-          currentSentence: currentSrtForAI,
-          prevSentence: prevSrt,
-          nextSentence: nextSrt
-        }
-      }, (response) => {
-         if (chrome.runtime.lastError) {
-          currentSentenceAIAnalysis = null;
-          console.error("[KoreanDict] Runtime error sending/receiving message (Shadow DOM):", chrome.runtime.lastError);
-          showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, { error: `Extension error: ${chrome.runtime.lastError.message}` });
-          currentAIRequest = null;
-          return;
-        }
-        console.log("[KoreanDict] Full AI Response Data (Shadow DOM):", response ? response.data : 'No response data');
-
-        if (response && response.data && response.data.words_analysis) {
-            currentSentenceAIAnalysis = {
-                originalSentence: currentSentenceText,
-                words_analysis: response.data.words_analysis
-            };
-        } else if (response && response.error) {
-            currentSentenceAIAnalysis = null;
-        }
-
-        const latestHoverContext = extractWordAndSentenceFromRange(range); // Re-check range
-        if (latestHoverContext && latestHoverContext.word.trim().normalize() === currentHoveredWord && latestHoverContext.sentenceText.trim().normalize() === currentSentenceText) {
-            showTooltip(e.clientX, e.clientY, currentHoveredWord, currentSentenceText, response);
-        } else if (latestHoverContext && latestHoverContext.sentenceText.trim().normalize() === currentSentenceText) {
-            showTooltip(e.clientX, e.clientY, latestHoverContext.word.trim().normalize(), currentSentenceText, null);
-        }
-        
-        if (!response || response.error) {
-            currentAIRequest = null;
-        }
-      });
-    } else {
-      hideTooltip();
-      currentAIRequest = null;
-    }
-  } else {
-    hideTooltip();
-    currentAIRequest = null;
+    const data = await response.json();
+    dictionaryEntries = Array.isArray(data.words) ? data.words : [];
+    dictionaryIndex = buildDictionaryIndex(dictionaryEntries);
+    dictionaryReady = true;
+    dictionaryLoadError = '';
+    rerenderCurrentTooltip();
+  } catch (error) {
+    dictionaryEntries = [];
+    dictionaryIndex = { bySurface: new Map(), byBase: new Map() };
+    dictionaryReady = false;
+    dictionaryLoadError = error.message;
+    rerenderCurrentTooltip();
   }
 }
 
-// Scan for shadow roots and attach listeners
-function scanAndAttachShadowRoots() {
-  document.querySelectorAll('*').forEach(el => {
-    if (el.shadowRoot && !el.shadowRoot._koreanLookupListenerAttached) {
-      addShadowDomListeners(el.shadowRoot);
+function buildDictionaryIndex(entries) {
+  const bySurface = new Map();
+  const byBase = new Map();
+
+  for (const entry of entries) {
+    const surface = normalizeText(entry.surface || '');
+    const base = normalizeText(entry.base || '');
+
+    if (surface) {
+      if (!bySurface.has(surface)) {
+        bySurface.set(surface, []);
+      }
+      bySurface.get(surface).push(entry);
+    }
+
+    if (base) {
+      if (!byBase.has(base)) {
+        byBase.set(base, []);
+      }
+      byBase.get(base).push(entry);
+    }
+  }
+
+  return { bySurface, byBase };
+}
+
+function attachHoverListeners(root) {
+  if (!root || root._munmekHoverAttached) {
+    return;
+  }
+
+  root.addEventListener('mousemove', handleMouseMove);
+  root._munmekHoverAttached = true;
+}
+
+function observeShadowRoots() {
+  scanForShadowRoots();
+
+  const observer = new MutationObserver(() => {
+    scanForShadowRoots();
+  });
+
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+}
+
+function scanForShadowRoots() {
+  document.querySelectorAll('*').forEach((element) => {
+    if (element.shadowRoot) {
+      attachHoverListeners(element.shadowRoot);
     }
   });
 }
 
-// Initial scan and observe for dynamically added shadow roots
-scanAndAttachShadowRoots();
-const observer = new MutationObserver((mutationsList) => {
-    for (const mutation of mutationsList) {
-        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-            mutation.addedNodes.forEach(node => {
-                if (node.nodeType === Node.ELEMENT_NODE) {
-                    if (node.shadowRoot && !node.shadowRoot._koreanLookupListenerAttached) {
-                        addShadowDomListeners(node.shadowRoot);
-                    }
-                    // Also check descendants of the added node
-                    node.querySelectorAll('*').forEach(descendant => {
-                        if (descendant.shadowRoot && !descendant.shadowRoot._koreanLookupListenerAttached) {
-                            addShadowDomListeners(descendant.shadowRoot);
-                        }
-                    });
-                }
-            });
-        }
-    }
-});
-observer.observe(document.body, { childList: true, subtree: true });
+function handleMouseMove(event) {
+  const range = getRangeFromPoint(event.view?.document || document, event.clientX, event.clientY);
+  const hoverContext = extractHoverContext(range);
 
+  if (!hoverContext) {
+    scheduleHideTooltip();
+    return;
+  }
+
+  const hoverState = buildHoverState(hoverContext, event.clientX, event.clientY);
+  const signature = `${hoverState.word}|${hoverState.sentenceKey}`;
+
+  if (signature === lastHoverSignature && tooltip && tooltip.style.display === 'block') {
+    lastTooltipPosition = { x: event.clientX, y: event.clientY };
+    positionTooltip(event.clientX, event.clientY);
+    currentHoverState = hoverState;
+    return;
+  }
+
+  lastHoverSignature = signature;
+  currentHoverState = hoverState;
+  lastTooltipPosition = { x: event.clientX, y: event.clientY };
+  renderTooltip(hoverState);
+}
+
+function getRangeFromPoint(doc, x, y) {
+  try {
+    if (doc.caretRangeFromPoint) {
+      return doc.caretRangeFromPoint(x, y);
+    }
+
+    if (doc.caretPositionFromPoint) {
+      const position = doc.caretPositionFromPoint(x, y);
+      if (position && position.offsetNode) {
+        const range = doc.createRange();
+        range.setStart(position.offsetNode, position.offset);
+        range.setEnd(position.offsetNode, position.offset);
+        return range;
+      }
+    }
+  } catch (error) {
+    return null;
+  }
+
+  return null;
+}
+
+function extractHoverContext(range) {
+  if (!range) {
+    return null;
+  }
+
+  const node = range.startContainer;
+  if (!node || node.nodeType !== Node.TEXT_NODE) {
+    return null;
+  }
+
+  const textContent = node.textContent || '';
+  if (!textContent.trim()) {
+    return null;
+  }
+
+  const offset = Math.min(range.startOffset || 0, textContent.length);
+  const wordChar = /[\p{L}\p{N}\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/u;
+
+  let start = offset;
+  while (start > 0 && wordChar.test(textContent[start - 1])) {
+    start--;
+  }
+
+  let end = offset;
+  while (end < textContent.length && wordChar.test(textContent[end])) {
+    end++;
+  }
+
+  const word = textContent.slice(start, end).trim();
+  if (!word) {
+    return null;
+  }
+
+  const paragraphText = normalizeText(node.parentElement?.textContent || textContent);
+  const sentenceWindow = getSentenceWindow(paragraphText, word);
+
+  return {
+    word,
+    sentence: sentenceWindow.currentSentence,
+    prevSentence: sentenceWindow.prevSentence,
+    nextSentence: sentenceWindow.nextSentence,
+    paragraphText
+  };
+}
+
+function getSentenceWindow(text, sentenceFragment) {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return {
+      currentSentence: sentenceFragment,
+      prevSentence: '',
+      nextSentence: ''
+    };
+  }
+
+  const sentences = normalized
+    .split(/(?<=[.!?。？！])\s+|\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (sentences.length === 0) {
+    return {
+      currentSentence: normalized,
+      prevSentence: '',
+      nextSentence: ''
+    };
+  }
+
+  const fragment = normalizeText(sentenceFragment);
+  let index = sentences.findIndex((candidate) => candidate.includes(fragment) || fragment.includes(candidate));
+
+  if (index === -1) {
+    const containingLine = sentences.find((candidate) => candidate.includes(fragment)) || sentences[0];
+    index = sentences.indexOf(containingLine);
+  }
+
+  return {
+    currentSentence: sentences[index] || normalized,
+    prevSentence: index > 0 ? sentences[index - 1] : '',
+    nextSentence: index >= 0 && index < sentences.length - 1 ? sentences[index + 1] : ''
+  };
+}
+
+function buildHoverState(context, x, y) {
+  const word = normalizeText(context.word);
+  const sentence = normalizeText(context.sentence);
+  const lookup = findBestDictionaryEntry(word);
+  const sentenceKey = normalizeText(sentence || word);
+
+  return {
+    word,
+    sentence,
+    sentenceKey,
+    prevSentence: normalizeText(context.prevSentence),
+    nextSentence: normalizeText(context.nextSentence),
+    dictionaryEntry: lookup.entry,
+    dictionaryMatch: lookup.match,
+    candidateList: lookup.candidates,
+    lookupReason: lookup.reason,
+    x,
+    y,
+    feedback: '',
+    feedbackType: 'info'
+  };
+}
+
+function findBestDictionaryEntry(surface) {
+  const candidates = generateCandidates(surface);
+
+  for (const candidate of candidates) {
+    const surfaceHits = dictionaryIndex.bySurface.get(candidate.text);
+    if (surfaceHits && surfaceHits.length > 0) {
+      return {
+        entry: surfaceHits[0],
+        match: candidate.text,
+        candidates,
+        reason: candidate.reason
+      };
+    }
+
+    const baseHits = dictionaryIndex.byBase.get(candidate.text);
+    if (baseHits && baseHits.length > 0) {
+      return {
+        entry: baseHits[0],
+        match: candidate.text,
+        candidates,
+        reason: candidate.reason
+      };
+    }
+  }
+
+  return {
+    entry: null,
+    match: '',
+    candidates,
+    reason: candidates.length > 0 ? candidates[0].reason : 'No candidate match'
+  };
+}
+
+function generateCandidates(surface) {
+  const candidates = [];
+  const push = (text, reason, score) => {
+    const normalized = normalizeText(text);
+    if (!normalized || candidates.some((candidate) => candidate.text === normalized)) {
+      return;
+    }
+
+    candidates.push({ text: normalized, reason, score });
+  };
+
+  push(surface, 'surface form', 100);
+
+  const particleSuffixes = ['으로부터', '에게서', '한테서', '에서', '에게', '한테', '까지', '부터', '으로', '로', '보다', '처럼', '같이', '만', '도', '은', '는', '이', '가', '을', '를', '의', '과', '와'];
+  for (const suffix of particleSuffixes) {
+    if (surface.length > suffix.length + 1 && surface.endsWith(suffix)) {
+      push(surface.slice(0, -suffix.length), `removed particle ${suffix}`, 80);
+    }
+  }
+
+  const politeVerbRules = [
+    { suffix: '합니다', replacement: '하다' },
+    { suffix: '합니다만', replacement: '하다' },
+    { suffix: '해요', replacement: '하다' },
+    { suffix: '하세요', replacement: '하다' },
+    { suffix: '어요', replacement: '다' },
+    { suffix: '아요', replacement: '다' },
+    { suffix: '었어요', replacement: '다' },
+    { suffix: '았어요', replacement: '다' },
+    { suffix: '였어요', replacement: '다' },
+    { suffix: '했다', replacement: '하다' },
+    { suffix: '했다면', replacement: '하다' }
+  ];
+
+  for (const rule of politeVerbRules) {
+    if (surface.endsWith(rule.suffix)) {
+      const baseGuess = rule.replacement === '하다'
+        ? surface.replace(new RegExp(`${rule.suffix}$`), '하다')
+        : `${surface.slice(0, -rule.suffix.length)}${rule.replacement}`;
+      push(baseGuess, `verb ending ${rule.suffix}`, 70);
+    }
+  }
+
+  if (surface.endsWith('요') && surface.length > 1) {
+    push(surface.slice(0, -1), 'removed polite ending 요', 60);
+  }
+
+  candidates.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
+  return candidates;
+}
+
+function renderTooltip(state) {
+  ensureTooltip();
+
+  const analysis = sentenceAnalysisCache.get(state.sentenceKey) || null;
+  const html = [
+    `<div class="title">${escapeHtml(state.word || '...')}</div>`,
+    state.sentence ? `<div class="subtitle">${escapeHtml(truncate(state.sentence, 180))}</div>` : '',
+    state.dictionaryEntry ? renderDictionaryEntry(state.dictionaryEntry, state.dictionaryMatch || state.lookupReason) : renderDictionaryCandidates(state.candidateList, state.lookupReason),
+    renderActions(state, Boolean(analysis)),
+    renderAnalysisSection(analysis),
+    state.feedback ? `<div class="feedback ${state.feedbackType === 'error' ? 'error' : ''}">${escapeHtml(state.feedback)}</div>` : '',
+    dictionaryLoadError ? `<div class="feedback error">Dictionary load error: ${escapeHtml(dictionaryLoadError)}</div>` : ''
+  ].filter(Boolean).join('');
+
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+  positionTooltip(state.x, state.y);
+}
+
+function renderDictionaryEntry(entry, matchLabel) {
+  const definitions = Array.isArray(entry.definitions) ? entry.definitions : [];
+  const chips = [entry.pos, entry.type, matchLabel].filter(Boolean).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
+
+  return `
+    <div class="section entry-box">
+      <div class="entry-head">
+        <div class="entry-word">${escapeHtml(entry.surface || '')}${entry.base && entry.base !== entry.surface ? ` <span class="muted">(${escapeHtml(entry.base)})</span>` : ''}</div>
+      </div>
+      <div class="chips">${chips}</div>
+      ${entry.hanja ? `<div class="section"><div class="label">Hanja</div><div>${escapeHtml(entry.hanja)}</div></div>` : ''}
+      ${definitions.length > 0 ? `<div class="section"><div class="label">Definition</div><ul>${definitions.map((definition) => `<li>${escapeHtml(definition)}</li>`).join('')}</ul></div>` : '<div class="section empty">No definition text in the local sample dictionary yet.</div>'}
+      ${entry.grammar_notes ? `<div class="section"><div class="label">Notes</div><div>${escapeHtml(entry.grammar_notes)}</div></div>` : ''}
+    </div>
+  `;
+}
+
+function renderDictionaryCandidates(candidates, reason) {
+  const limited = candidates.slice(0, 4);
+  return `
+    <div class="section entry-box">
+      <div class="label">Local lookup</div>
+      <div class="empty">${escapeHtml(reason || 'No exact dictionary hit yet.')}.</div>
+      <div class="chips">
+        ${limited.map((candidate) => `<span class="chip">${escapeHtml(candidate.text)}</span>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderActions(state, hasCachedAnalysis) {
+  const aiLabel = hasCachedAnalysis ? 'Refresh Gemini' : 'Ask Gemini';
+  return `
+    <div class="section">
+      <div class="actions">
+        <button class="primary-button" data-action="analyze">${escapeHtml(aiLabel)}</button>
+        <button class="secondary-button" data-action="anki">Send to Anki</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderAnalysisSection(analysis) {
+  if (!analysis) {
+    return '<div class="section empty">Ask Gemini for a richer, context-aware explanation.</div>';
+  }
+
+  if (analysis.error) {
+    return `<div class="section feedback error">${escapeHtml(analysis.error)}</div>`;
+  }
+
+  const parts = [];
+  const translation = analysis.translation || analysis.definition;
+  const grammar = analysis.grammar || analysis.grammar_notes;
+  const notes = analysis.notes;
+  const hanja = analysis.hanja;
+  const relatedWords = analysis.related_words || {};
+  const examples = Array.isArray(analysis.examples) ? analysis.examples : [];
+
+  if (translation) {
+    parts.push(`<div><div class="label">Gemini meaning</div><div>${escapeHtml(translation)}</div></div>`);
+  }
+
+  if (grammar) {
+    parts.push(`<div><div class="label">Grammar</div><div>${escapeHtml(grammar)}</div></div>`);
+  }
+
+  if (hanja) {
+    parts.push(`<div><div class="label">Hanja</div><div>${escapeHtml(hanja)}</div></div>`);
+  }
+
+  if (notes) {
+    parts.push(`<div><div class="label">Notes</div><div>${escapeHtml(notes)}</div></div>`);
+  }
+
+  if (relatedWords.synonyms || relatedWords.antonyms) {
+    const synonymList = Array.isArray(relatedWords.synonyms) ? relatedWords.synonyms : [];
+    const antonymList = Array.isArray(relatedWords.antonyms) ? relatedWords.antonyms : [];
+    if (synonymList.length > 0 || antonymList.length > 0) {
+      parts.push(`
+        <div>
+          <div class="label">Related words</div>
+          ${synonymList.length > 0 ? `<div class="muted">Synonyms: ${escapeHtml(synonymList.join(', '))}</div>` : ''}
+          ${antonymList.length > 0 ? `<div class="muted">Antonyms: ${escapeHtml(antonymList.join(', '))}</div>` : ''}
+        </div>
+      `);
+    }
+  }
+
+  if (examples.length > 0) {
+    parts.push(`<div><div class="label">Examples</div><ul>${examples.map((example) => `<li>${escapeHtml(example)}</li>`).join('')}</ul></div>`);
+  }
+
+  if (parts.length === 0) {
+    parts.push(`<div class="empty">${escapeHtml(JSON.stringify(analysis, null, 2))}</div>`);
+  }
+
+  return `<div class="section entry-box">${parts.join('')}</div>`;
+}
+
+function ensureTooltip() {
+  if (tooltip) {
+    return;
+  }
+
+  tooltip = document.createElement('div');
+  tooltip.id = TOOLTIP_ID;
+  tooltip.className = 'munmek-tooltip';
+  tooltip.addEventListener('mouseenter', cancelHideTooltip);
+  tooltip.addEventListener('mouseleave', scheduleHideTooltip);
+  tooltip.addEventListener('click', handleTooltipClick);
+  document.body.appendChild(tooltip);
+}
+
+function handleTooltipClick(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const action = target.getAttribute('data-action');
+  if (!action || !currentHoverState) {
+    return;
+  }
+
+  if (action === 'analyze') {
+    requestSentenceAnalysis(currentHoverState);
+  }
+
+  if (action === 'anki') {
+    sendCardToAnki(currentHoverState);
+  }
+}
+
+function requestSentenceAnalysis(state) {
+  if (sentenceAnalysisCache.has(state.sentenceKey) && !pendingAnalysisRequests.has(state.sentenceKey)) {
+    currentHoverState.feedback = 'Using cached Gemini analysis for this sentence.';
+    currentHoverState.feedbackType = 'info';
+    renderTooltip(currentHoverState);
+    return;
+  }
+
+  if (pendingAnalysisRequests.has(state.sentenceKey)) {
+    currentHoverState.feedback = 'Gemini analysis is already in progress.';
+    currentHoverState.feedbackType = 'info';
+    renderTooltip(currentHoverState);
+    return;
+  }
+
+  currentHoverState.feedback = 'Loading Gemini analysis...';
+  currentHoverState.feedbackType = 'info';
+  renderTooltip(currentHoverState);
+
+  pendingAnalysisRequests.set(state.sentenceKey, true);
+
+  chrome.runtime.sendMessage(
+    {
+      type: 'analyzeSentence',
+      data: {
+        word: state.word,
+        sentence: state.sentence,
+        prevSentence: state.prevSentence,
+        nextSentence: state.nextSentence,
+        dictionaryEntry: state.dictionaryEntry,
+        candidate: state.dictionaryMatch
+      }
+    },
+    (response) => {
+      pendingAnalysisRequests.delete(state.sentenceKey);
+
+      if (chrome.runtime.lastError) {
+        currentHoverState.feedback = `Extension error: ${chrome.runtime.lastError.message}`;
+        currentHoverState.feedbackType = 'error';
+        renderTooltip(currentHoverState);
+        return;
+      }
+
+      if (!response || response.error) {
+        currentHoverState.feedback = response?.error || 'Gemini request failed.';
+        currentHoverState.feedbackType = 'error';
+        renderTooltip(currentHoverState);
+        return;
+      }
+
+      sentenceAnalysisCache.set(state.sentenceKey, response.data);
+      currentHoverState.feedback = 'Gemini analysis ready.';
+      currentHoverState.feedbackType = 'info';
+      renderTooltip(currentHoverState);
+    }
+  );
+}
+
+function sendCardToAnki(state) {
+  const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey) || null;
+
+  currentHoverState.feedback = 'Sending card to Anki...';
+  currentHoverState.feedbackType = 'info';
+  renderTooltip(currentHoverState);
+
+  chrome.runtime.sendMessage(
+    {
+      type: 'createAnkiCard',
+      data: {
+        word: state.word,
+        sentence: state.sentence,
+        prevSentence: state.prevSentence,
+        nextSentence: state.nextSentence,
+        dictionaryEntry: state.dictionaryEntry,
+        candidate: state.dictionaryMatch,
+        analysis: cachedAnalysis
+      }
+    },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        currentHoverState.feedback = `Extension error: ${chrome.runtime.lastError.message}`;
+        currentHoverState.feedbackType = 'error';
+        renderTooltip(currentHoverState);
+        return;
+      }
+
+      if (!response || response.error) {
+        currentHoverState.feedback = response?.error || 'AnkiConnect request failed.';
+        currentHoverState.feedbackType = 'error';
+        renderTooltip(currentHoverState);
+        return;
+      }
+
+      currentHoverState.feedback = response.data?.updated ? 'Updated the last Anki card.' : 'Created a new Anki card.';
+      currentHoverState.feedbackType = 'info';
+      renderTooltip(currentHoverState);
+    }
+  );
+}
+
+function rerenderCurrentTooltip() {
+  if (currentHoverState && tooltip && tooltip.style.display === 'block') {
+    renderTooltip(currentHoverState);
+  }
+}
+
+function positionTooltip(x, y) {
+  if (!tooltip) {
+    return;
+  }
+
+  tooltip.style.visibility = 'hidden';
+  tooltip.style.display = 'block';
+
+  const rect = tooltip.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+
+  let left = x + 18;
+  let top = y + 18;
+
+  if (left + width > window.innerWidth - 8) {
+    left = x - width - 18;
+  }
+
+  if (top + height > window.innerHeight - 8) {
+    top = y - height - 18;
+  }
+
+  left = Math.max(8, left);
+  top = Math.max(8, top);
+
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  tooltip.style.visibility = 'visible';
+}
+
+function scheduleHideTooltip() {
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => {
+    hideTooltip();
+  }, HIDE_DELAY_MS);
+}
+
+function cancelHideTooltip() {
+  clearTimeout(hideTimer);
+}
+
+function hideTooltip() {
+  if (tooltip) {
+    tooltip.style.display = 'none';
+  }
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .normalize()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truncate(value, maxLength) {
+  const text = normalizeText(value);
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength - 1)}…`;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
