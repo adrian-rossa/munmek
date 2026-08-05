@@ -20,14 +20,15 @@ Core functionality:
 ## 2. Our Progress & Progress Tracker
 
 - [x] **Local Lookup Path**: Hover extraction, candidate generation, and local dictionary matching.
-- [x] **Interactive Tooltip UI**: Custom styled hover popup with candidate switching chips, cached Gemini analysis, and Anki export.
+- [x] **Interactive Tooltip UI**: Custom styled hover popup with candidate switching chips, definition tabs, cached Gemini analysis, and Anki export.
 - [x] **Hangul Jamo Engine (`korean_jamo.js`)**: Syllable decomposition (초성, 중성, 종성) and composition.
 - [x] **Rule-Based Morphological Lemmatizer (`korean_lemmatizer.js`)**: Particle stripping, copulas, and de-conjugation for regular & irregular Korean verbs/adjectives (ㅂ, ㄷ, ㄹ, ㅅ, ㅎ, ㅡ, 르).
 - [x] **Pipeline Orchestrator (`korean_pipeline.js`)**: Scored candidate generation with async provider hooks.
 - [x] **Offscreen WASM Morphological Analyzer (`offscreen.html`, `offscreen.js`, `lib/garu/`)**: Offscreen document host running Garu-ko WASM for high-accuracy offline stem recovery.
 - [x] **Real KoELECTRA INT8 ONNX Progressive Context Reranker (`onnx_reranker.js`, `lib/models/koelectra_small_v3_int8.onnx`, `lib/onnx/wordpiece_tokenizer.js`)**: Local ONNX neural inference for homonym disambiguation.
-- [x] **Option C Hybrid IndexedDB Dictionary Engine & Importer (`dictionary_db.js`, `options.html`, `options.js`)**: IndexedDB dictionary engine with chunked term bank file importer and dictionary preference selector.
-- [x] **asbplayer Subtitle Context Extractor (`content.js`)**: Automatic sentence context extraction for asbplayer subtitles.
+- [x] **IndexedDB Termbank Engine & Importer UI (`dictionary_db.js`, `options.html`, `options.js`)**: Chunked term bank zip/json importer supporting 100,000+ entries with interactive Move Up/Down priority ordering.
+- [x] **asbplayer Subtitle & Page Context Extractor (`content.js`, `popup.js`)**: Automatic sentence context extraction for asbplayer subtitles with background Gemini summarization.
+- [x] **Automated Vitest Test Suite (`test/`)**: 13 unit tests verifying Jamo rules, particle stripping, irregular verb de-conjugation, IndexedDB queries, and Anki field template rendering.
 
 ## 3. Project Architecture & Key Files
 

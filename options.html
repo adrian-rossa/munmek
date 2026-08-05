@@ -3,57 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Munmek Settings</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f3efe7;
-      --panel: #fffdf8;
-      --ink: #1e1b16;
-      --muted: #6c6458;
-      --line: #ddd3c4;
-      --accent: #2f5d62;
-      --accent-soft: #e4f0ee;
-    }
-    body { font-family: Georgia, 'Times New Roman', serif; margin: 0; background: linear-gradient(180deg, #efe8dc 0%, #f7f3ed 100%); color: var(--ink); }
-    .container { max-width: 860px; margin: 0 auto; padding: 32px 20px 48px; }
-    .hero { background: linear-gradient(135deg, #17383b, #305f63); color: white; padding: 28px; border-radius: 24px; box-shadow: 0 16px 45px rgba(23, 56, 59, 0.18); }
-    .hero h1 { margin: 0 0 10px; font-size: 2rem; letter-spacing: 0.01em; }
-    .hero p { margin: 0; max-width: 62ch; color: rgba(255,255,255,0.88); line-height: 1.6; }
-    .grid { display: grid; gap: 18px; grid-template-columns: 1fr; margin-top: 20px; }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 22px; box-shadow: 0 8px 28px rgba(31, 24, 14, 0.06); }
-    h2 { margin: 0 0 12px; font-size: 1.1rem; }
-    label { display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 700; }
-    input[type="text"], input[type="password"], textarea {
-      width: 100%;
-      padding: 12px 14px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      box-sizing: border-box;
-      font-size: 15px;
-      background: #fff;
-      color: var(--ink);
-    }
-    textarea { min-height: 150px; resize: vertical; line-height: 1.5; }
-    .hint { font-size: 0.9rem; color: var(--muted); line-height: 1.5; margin-top: 8px; }
-    .inline-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-    .toolbar { display: flex; gap: 12px; align-items: center; margin-top: 20px; flex-wrap: wrap; }
-    button {
-      padding: 12px 18px;
-      background: var(--accent);
-      color: white;
-      border: none;
-      border-radius: 999px;
-      cursor: pointer;
-      font-size: 15px;
-      font-weight: 700;
-    }
-    button:hover { filter: brightness(1.05); }
-    #status { margin-top: 14px; font-weight: 700; }
-    .success { color: #1c6b39; }
-    .error { color: #b3261e; }
-    .small { font-size: 0.86rem; color: var(--muted); }
-    code { background: var(--accent-soft); padding: 2px 6px; border-radius: 6px; }
-  </style>
+  <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <div class="container">
@@ -157,7 +107,15 @@ Returns a single JSON object with key "words_analysis".</div>
           <option value="Meta">Meta (Hold Command / Windows key while hovering)</option>
           <option value="None">None (Always scan on hover without holding key)</option>
         </select>
-        <div class="hint">Select which button must be held to scan text and display the hover lookup popup.</div>
+        <label for="tooltipFontSize" style="margin-top: 14px;">Tooltip Font Size & Scale</label>
+        <select id="tooltipFontSize" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);">
+          <option value="13">Compact / Small (13px)</option>
+          <option value="15" selected>Normal (15px — Default)</option>
+          <option value="18">Large (18px — Recommended for Netflix / Video overlays)</option>
+          <option value="21">Extra Large (21px)</option>
+          <option value="24">Huge (24px)</option>
+        </select>
+        <div class="hint">Adjust the font size and overall scale of the hover lookup tooltip across all websites. Useful for high-DPI screens or video subtitles on sites like Netflix.</div>
       </section>
 
       <section class="card">

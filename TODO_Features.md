@@ -9,8 +9,10 @@
 4. Offscreen Document WASM Morphological Analyzer (`offscreen.html`, `offscreen.js`, `lib/garu/`) using Garu-ko WASM (~1.8 MB total assets) for high-accuracy offline stem extraction.
 5. Local IndexedDB Dictionary Engine (`dictionary_db.js`) for querying local dictionary entries.
 6. **Real KoELECTRA INT8 ONNX Progressive Context Reranker** (`onnx_reranker.js`, `lib/models/koelectra_small_v3_int8.onnx`, `lib/onnx/wordpiece_tokenizer.js`) with real ONNXRuntime neural session inference, [CLS] embedding cosine similarity scoring, and settings toggle.
-7. Fixed WASM full-sentence query bug, connected end-to-end background message routing, wired IndexedDB fallback lookups, and throttled mousemove events.
+8. Bulk IndexedDB term bank zip/json importer UI with interactive dictionary priority reordering (Move Up / Move Down controls).
+9. Interactive candidate selection chips inside hover tooltip UI for manual candidate stem switching.
+10. Automated Vitest test suite covering lemmatizer, IndexedDB storage, and AnkiConnect template generation.
 
-### Next
-1. Build bulk IndexedDB term bank importer UI / script for full KRDICT term banks (`dictionaries/KO-EN.KRDICT`).
-2. Interactive candidate selection chips inside hover tooltip UI for manual lemma switching.
+### Future Improvements Roadmap
+1. Additional Yomichan dictionary schema customizers (audio pronunciation links, pitch accents).
+2. Advanced custom Anki card template presets (e.g. Cloze deletion for target Korean sentences).

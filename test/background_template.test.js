@@ -43,6 +43,11 @@ function renderTemplate(template, context) {
   return result.replace(/\{\{[^}]+\}\}/g, '');
 }
 
+function convertNewlinesToBr(str) {
+  if (typeof str !== 'string' || !str) return '';
+  return str.replace(/\r?\n/g, '<br>');
+}
+
 describe('Background Template & Dynamic Context Rendering', () => {
   it('renders standard built-in placeholders correctly', () => {
     const data = {
@@ -74,5 +79,17 @@ describe('Background Template & Dynamic Context Rendering', () => {
     const ctx = { word: 'test' };
     const rendered = renderTemplate('{{word}} - {{missing_field}}', ctx);
     expect(rendered).toBe('test - ');
+  });
+
+  it('converts multi-line definition newlines into <br> tags for Anki HTML rendering', () => {
+    const data = {
+      word: '저녁',
+      selectedDefinition: 'evening\nThe hours between the time when the sun starts setting and the time when the night falls.'
+    };
+    const ctx = buildTemplateContext(data);
+    const rendered = renderTemplate('{{definition}}', ctx);
+    const converted = convertNewlinesToBr(rendered);
+
+    expect(converted).toBe('evening<br>The hours between the time when the sun starts setting and the time when the night falls.');
   });
 });

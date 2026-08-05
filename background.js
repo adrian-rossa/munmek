@@ -28,39 +28,20 @@ For EACH significant Korean word/phrase in '{SENTENCE}' (especially target '{WOR
 Return ONLY a single, valid JSON object with a top-level key "words_analysis". Do not include Markdown wrapping outside JSON.`;
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(['aiPromptExtension', 'modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField'], (result) => {
+  chrome.storage.local.get(['modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField'], (result) => {
     const defaults = {};
-
-    if (!result.modelId) {
-      defaults.modelId = DEFAULT_MODEL_ID;
-    }
-
-    if (!result.ankiConnectUrl) {
-      defaults.ankiConnectUrl = 'http://127.0.0.1:8765';
-    }
-
-    if (!result.ankiDeckName) {
-      defaults.ankiDeckName = 'Korean';
-    }
-
-    if (!result.ankiNoteType) {
-      defaults.ankiNoteType = 'Basic';
-    }
-
+    if (!result.modelId) defaults.modelId = DEFAULT_MODEL_ID;
+    if (!result.ankiConnectUrl) defaults.ankiConnectUrl = 'http://127.0.0.1:8765';
+    if (!result.ankiDeckName) defaults.ankiDeckName = 'Korean';
+    if (!result.ankiNoteType) defaults.ankiNoteType = 'Basic';
     if (!result.ankiFieldMapping) {
       defaults.ankiFieldMapping = JSON.stringify({
         Front: '{{word}}',
         Back: '{{definition}}<br><br>{{translation}}<br><br>{{grammar}}'
       }, null, 2);
     }
-
-    if (!result.ankiDefinitionField) {
-      defaults.ankiDefinitionField = 'Back';
-    }
-
-    if (Object.keys(defaults).length > 0) {
-      chrome.storage.local.set(defaults);
-    }
+    if (!result.ankiDefinitionField) defaults.ankiDefinitionField = 'Back';
+    if (Object.keys(defaults).length > 0) chrome.storage.local.set(defaults);
   });
 });
 
@@ -463,19 +444,25 @@ function buildAnkiPayload(config, data) {
   const fields = {};
 
   Object.entries(fieldMapping).forEach(([fieldName, template]) => {
-    fields[fieldName] = renderTemplate(String(template || ''), context);
+    const rendered = renderTemplate(String(template || ''), context);
+    fields[fieldName] = convertNewlinesToBr(rendered);
   });
 
   if (config.ankiUpdateLastCard) {
     const definitionField = config.ankiDefinitionField || 'Back';
     const definitionValue = renderDefinitionText(context);
-    fields[definitionField] = definitionValue;
+    fields[definitionField] = convertNewlinesToBr(definitionValue);
   }
 
   return {
     fields,
     tags: ['munmek', 'korean-lookup']
   };
+}
+
+function convertNewlinesToBr(str) {
+  if (typeof str !== 'string' || !str) return '';
+  return str.replace(/\r?\n/g, '<br>');
 }
 
 function unpackAnalysis(raw) {

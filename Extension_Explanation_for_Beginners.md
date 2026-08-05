@@ -19,7 +19,10 @@ It tells Chrome:
 ## 2. Page Interaction & Lookup Scripts
 
 ### `content.js`
-This script runs directly inside web pages. When you move your mouse over text, `content.js` detects the hovered Korean word and nearby sentence context, calls `KoreanPipeline` to get candidate dictionary words, and displays the hover definition popup.
+This script runs directly inside web pages. It listens to mouse movement and keyboard modifier keys (`Shift`), extracts hovered Korean words and surrounding sentence context, and coordinates dictionary lookups.
+
+### `content_ui.js` & `content.css`
+`content_ui.js` generates the HTML template cards, candidate switching chips, and definition tabs for the hover popup. `content.css` defines all visual styles, gradients, and font properties.
 
 ### `korean_jamo.js`
 Korean syllables like `한` are made of individual alphabet letters (Jamos: `ㅎ` + `ㅏ` + `ㄴ`). This script breaks Hangul characters down into their initial consonant (초성), vowel (중성), and final consonant (종성 / 받침) and builds them back together.
@@ -51,4 +54,17 @@ Contains the bundled WebAssembly binary (`garu_wasm_bg.wasm`) and lightweight mo
 Runs in the background. It manages the offscreen document lifecycle, sends API calls to Google Gemini when you click "Ask Gemini", and sends card data to AnkiConnect.
 
 ### `options.html` & `options.js`
-The settings page where users configure their Gemini API Key, prompt, and AnkiConnect deck settings.
+The settings page where users configure their Gemini API Key, prompt, dictionary priority ordering, and AnkiConnect deck settings.
+
+### `popup.html` & `popup.js`
+The extension pin bar popup window that allows users to extract active webpage article text or subtitle overlays into active background context for Gemini.
+
+---
+
+## 5. Neural Reranking & Automated Testing
+
+### `onnx_reranker.js`
+Runs local ONNXRuntime-Web neural inference (`koelectra_small_v3_int8.onnx`) inside the offscreen document. It calculates sentence-to-lemma embedding cosine similarities to disambiguate homonyms.
+
+### `test/`
+Contains automated unit tests run with Vitest (`npx vitest run`). These tests verify Jamo decomposition, particle stripping, verb de-conjugation, IndexedDB lookups, and Anki card field template formatting.

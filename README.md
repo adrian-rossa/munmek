@@ -66,9 +66,13 @@ Right-click the Munmek toolbar icon and select **Options** (or open `options.htm
 munmek/
 ├── manifest.json              # Manifest V3 Extension Manifest
 ├── background.js              # Service Worker (Offscreen lifecycle, Gemini API, AnkiConnect)
-├── content.js                 # Content script (Hover detection, DOM scraping, Tooltip UI)
-├── popup.html / popup.js      # Extension pin bar popup (Active tab context manager)
-├── options.html / options.js  # Extension settings page (API keys, Dictionary manager, Anki mapping)
+├── content.js                 # Core content script (Hover detection, DOM scraping, Range math)
+├── content_ui.js              # Tooltip UI renderer & template engine
+├── content.css                # Tooltip UI CSS stylesheet
+├── popup.html / popup.js      # Extension pin bar popup UI & controller
+├── popup.css                  # Popup CSS stylesheet
+├── options.html / options.js  # Extension settings UI & configuration controller
+├── options.css                # Settings page CSS stylesheet
 ├── dictionary_db.js           # IndexedDB engine for fast offline dictionary queries
 ├── korean_jamo.js             # Hangul alphabet decomposition/composition utility
 ├── korean_lemmatizer.js       # Rule-based particle stripper & verb de-conjugator
@@ -80,9 +84,26 @@ munmek/
 │   ├── models/                # Quantized KoELECTRA INT8 ONNX model & vocab.txt
 │   ├── onnx/                  # ONNXRuntime-Web engine & WordPiece tokenizer
 │   └── jszip.min.js           # ZIP extraction library for termbank imports
-├── test/                      # Automated unit & integration test suite (Vitest)
-└── LICENSE                    # MIT Open Source License
 ```
+
+---
+
+## Development & Automated Testing
+
+To run the automated test suite locally:
+
+```bash
+# Install dependencies
+npm install
+
+# Execute Vitest test suite
+npx vitest run
+```
+
+The test suite validates:
+- Rule-based Hangul Jamo decomposition and irregular verb/adjective de-conjugations (`test/korean_lemmatizer.test.js`)
+- IndexedDB termbank storage & multi-dictionary priority queries (`test/dictionary_db.test.js`)
+- Background messaging and Anki template rendering (`test/background_template.test.js`)
 
 ---
 

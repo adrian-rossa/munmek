@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const dictListContainer = document.getElementById('dictListContainer');
   const selectedDictionaryIdInput = document.getElementById('selectedDictionaryId');
   const modifierKeyInput = document.getElementById('modifierKey');
+  const tooltipFontSizeInput = document.getElementById('tooltipFontSize');
   const saveButton = document.getElementById('save');
   const resetButton = document.getElementById('reset');
   const statusDiv = document.getElementById('status');
@@ -397,7 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  chrome.storage.local.get(['apiKey', 'modelId', 'aiPromptExtension', 'responseLanguage', 'customResponseLanguage', 'enableOnnxReranker', 'useFullContext', 'enableCheaperSummaryModel', 'cheaperSummaryModelId', 'selectedDictionaryId', 'modifierKey', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'trackedGeminiFields'], (result) => {
+  chrome.storage.local.get(['apiKey', 'modelId', 'aiPromptExtension', 'responseLanguage', 'customResponseLanguage', 'enableOnnxReranker', 'useFullContext', 'enableCheaperSummaryModel', 'cheaperSummaryModelId', 'selectedDictionaryId', 'modifierKey', 'tooltipFontSize', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'trackedGeminiFields'], (result) => {
     if (result.trackedGeminiFields) cachedTrackedGeminiFields = result.trackedGeminiFields;
     if (result.apiKey) apiKeyInput.value = result.apiKey;
     modelIdInput.value = result.modelId || 'gemini-2.0-flash-lite';
@@ -415,6 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = result.cheaperSummaryModelId || 'gemini-2.0-flash-lite';
     if (selectedDictionaryIdInput && result.selectedDictionaryId) selectedDictionaryIdInput.value = result.selectedDictionaryId;
     if (modifierKeyInput) modifierKeyInput.value = result.modifierKey || 'Shift';
+    if (tooltipFontSizeInput) tooltipFontSizeInput.value = result.tooltipFontSize || '15';
     ankiConnectUrlInput.value = result.ankiConnectUrl || 'http://127.0.0.1:8765';
     ankiDeckNameSelect.setAttribute('data-value', result.ankiDeckName || 'Korean');
     ankiNoteTypeSelect.setAttribute('data-value', result.ankiNoteType || 'Basic');
@@ -440,6 +442,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = 'gemini-2.0-flash-lite';
     if (selectedDictionaryIdInput) selectedDictionaryIdInput.value = 'all';
     if (modifierKeyInput) modifierKeyInput.value = 'Shift';
+    if (tooltipFontSizeInput) tooltipFontSizeInput.value = '15';
     ankiConnectUrlInput.value = 'http://127.0.0.1:8765';
     statusDiv.textContent = 'Defaults restored locally. Click Save to store them.';
     statusDiv.className = 'success';
@@ -457,6 +460,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const cheaperSummaryModelId = cheaperSummaryModelIdInput ? cheaperSummaryModelIdInput.value.trim() : 'gemini-2.0-flash-lite';
     const selectedDictionaryId = selectedDictionaryIdInput ? selectedDictionaryIdInput.value : 'all';
     const modifierKey = modifierKeyInput ? modifierKeyInput.value : 'Shift';
+    const tooltipFontSize = tooltipFontSizeInput ? tooltipFontSizeInput.value : '15';
     const ankiConnectUrl = ankiConnectUrlInput.value.trim();
     const ankiDeckName = ankiDeckNameSelect.value || 'Korean';
     const ankiNoteType = ankiNoteTypeSelect.value || 'Basic';
@@ -478,7 +482,7 @@ document.addEventListener('DOMContentLoaded', () => {
     cachedTrackedGeminiFields = updatedTrackedFields;
 
     const dataToSave = {
-      apiKey, modelId, aiPromptExtension, responseLanguage, customResponseLanguage, enableOnnxReranker, useFullContext, enableCheaperSummaryModel, cheaperSummaryModelId, selectedDictionaryId, modifierKey, ankiConnectUrl, ankiDeckName, ankiNoteType,
+      apiKey, modelId, aiPromptExtension, responseLanguage, customResponseLanguage, enableOnnxReranker, useFullContext, enableCheaperSummaryModel, cheaperSummaryModelId, selectedDictionaryId, modifierKey, tooltipFontSize, ankiConnectUrl, ankiDeckName, ankiNoteType,
       ankiFieldMapping: JSON.stringify(savedFieldMapping, null, 2), ankiDefinitionField, dictionaryOrder: currentDictOrder,
       trackedGeminiFields: updatedTrackedFields
     };
