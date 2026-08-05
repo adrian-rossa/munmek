@@ -1,7 +1,11 @@
 # Munmek (문맥) — Korean Context Lookup
 
-**Munmek** is a powerful Chrome/Chromium browser extension for fast, context-aware Korean word lookups. It combines a local offline termbank engine (supporting Yomichan / KRDICT imports), a hybrid morphological analyzer, neural KoELECTRA candidate reranking, optional Google Gemini explanations, ASBPlayer subtitle support, and interactive AnkiConnect flashcard exports.
+**Munmek** is a Chromium browser extension for fast, optionally context-aware Korean word lookups. It combines a local offline termbank engine (supporting Yomichan / KRDICT imports), a hybrid morphological analyzer, neural KoELECTRA candidate reranking, optional Google Gemini explanations for context-aware definitions and explanations, ASBPlayer subtitle support, and interactive AnkiConnect flashcard exports.
+This extension aims to solve the ambiguity that makes Korean so difficult for beginners.
 
+In its current state this extension serves as a **proof of concept**. I will rework it from scratch for better maintainability if demand is there and it proves useful.
+Meanwhile Kimchi Reader or Migaku are more polished and actively maintained alternatives with a similar featureset.
+Credits for the amazing [blog post](https://kimchi-reader.app/blog/int8-cpu-korean-disambiguation) regarding the KoELECTRA INT8 Reranker go to Kimchi Readers developer @Alanoor.
 ---
 
 ## Key Features
@@ -12,8 +16,8 @@
   - **Tier 2 (Garu-ko WASM Analyzer)**: Runs a compact WebAssembly analyzer (~1.8 MB) inside a Manifest V3 Offscreen Document to extract base dictionary stems offline.
 - 🧠 **KoELECTRA INT8 ONNX Candidate Reranker**: Runs local ONNXRuntime-Web neural model inference (`koelectra_small_v3_int8.onnx`) with WordPiece tokenization and `[CLS]` embedding cosine similarity scoring to disambiguate homonyms in context.
 - 📚 **IndexedDB Termbank Engine & Priority Ranking**: Import full Yomichan KO-EN / KO-JP `.zip` or `.json` dictionary termbanks (e.g. KRDICT) to store 100,000+ entries in local IndexedDB. Customize dictionary search priority order with interactive Move Up / Move Down controls.
-- 🤖 **On-Demand Gemini AI Explanations**: Click "Ask Gemini" inside the hover tooltip for context-aware grammar notes, clause analysis, and nuances. Sentence analyses are automatically cached across words in the same sentence.
-- 📄 **Extension Pin Bar Context Extractor**: Extract active webpage article text or ASBPlayer video subtitles, automatically summarize them with Gemini for token efficiency, and attach them as background context for AI lookups.
+- 🤖 **On-Demand Gemini AI Explanations**: Click "Ask Gemini" inside the hover tooltip for context-aware grammar notes, clause analysis, and nuances. Sentence analyses are automatically cached across words in the same sentence. Flash models are fast which makes them suitable for this use case. The extension is designed with token usage in mind so that it can be used for free.
+- 📄 **Extension Pin Bar Context Extractor**: Extract active webpage article text or ASBPlayer video subtitles, automatically summarize them with Gemini for token efficiency, and attach them as additional background context for AI lookups.
 - 🎴 **Interactive AnkiConnect Card Export**: One-click card export to Anki desktop with custom deck selection, note types, and dynamic field mapping (including custom LLM JSON fields). Supports creating new cards or updating the last created card (e.g., from ASBPlayer).
 
 ---
@@ -126,7 +130,7 @@ Munmek is made possible thanks to the following open-source libraries, models, a
 
 | Technology / Resource | Author / Provider | License | Usage in Munmek |
 | :--- | :--- | :--- | :--- |
-| [Garu-ko](https://github.com/phlummox/garu-ko) | phlummox | **MIT** | WebAssembly Korean morphological analyzer |
+| [Garu-ko](https://github.com/ongjin/garu) | phlummox | **MIT** | WebAssembly Korean morphological analyzer |
 | [KoELECTRA](https://github.com/monologg/KoELECTRA) | Park Jangwon (monologg) | **Apache 2.0** | INT8 ONNX candidate reranking neural model |
 | [ONNXRuntime-Web](https://github.com/microsoft/onnxruntime) | Microsoft | **MIT** | Local WebAssembly neural inference engine |
 | [JSZip](https://github.com/Stuk/jszip) | Stuart Knightley | **MIT / GPLv3** | ZIP archive unpacker for dictionary imports |
