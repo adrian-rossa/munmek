@@ -1,27 +1,86 @@
-const DICTIONARY_URL = chrome.runtime.getURL('korean_words.json');
-const HIDE_DELAY_MS = 220;
+const HIDE_DELAY_MS = 450;
 const TOOLTIP_ID = 'munmek-tooltip';
 const STYLE_ID = 'munmek-tooltip-style';
 
 const sentenceAnalysisCache = new Map();
 const pendingAnalysisRequests = new Map();
 
-let dictionaryEntries = [];
-let dictionaryIndex = { bySurface: new Map(), byBase: new Map() };
-let dictionaryReady = false;
-let dictionaryLoadError = '';
-
 let tooltip = null;
 let hideTimer = null;
 let currentHoverState = null;
 let lastHoverSignature = '';
 let lastTooltipPosition = { x: 0, y: 0 };
+let isMouseOverTooltip = false;
+let currentModifierKey = 'Shift';
 
 function init() {
   injectTooltipStyles();
-  loadDictionary();
   attachHoverListeners(document);
   observeShadowRoots();
+
+  chrome.storage.local.get(['modifierKey'], (result) => {
+    if (result.modifierKey !== undefined) {
+      currentModifierKey = result.modifierKey;
+    }
+  });
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.modifierKey) {
+      currentModifierKey = changes.modifierKey.newValue || 'Shift';
+    }
+  });
+
+  window.addEventListener('keydown', handleGlobalKeyDown);
+  window.addEventListener('keyup', handleGlobalKeyUp);
+
+  window.addEventListener('munmekWasmAnalysisReady', (e) => {
+    if (currentHoverState && e.detail && e.detail.surfaceText === currentHoverState.word) {
+      const updatedHoverState = buildHoverState(
+        {
+          word: currentHoverState.word,
+          sentence: currentHoverState.sentence,
+          prevSentence: currentHoverState.prevSentence,
+          nextSentence: currentHoverState.nextSentence
+        },
+        lastTooltipPosition.x,
+        lastTooltipPosition.y
+      );
+      currentHoverState = updatedHoverState;
+      rerenderCurrentTooltip();
+    }
+  });
+}
+
+function isModifierPressed(event) {
+  if (!currentModifierKey || currentModifierKey === 'None') {
+    return true;
+  }
+  if (!event) return false;
+  if (currentModifierKey === 'Shift') return Boolean(event.shiftKey);
+  if (currentModifierKey === 'Alt') return Boolean(event.altKey);
+  if (currentModifierKey === 'Control') return Boolean(event.ctrlKey);
+  if (currentModifierKey === 'Meta') return Boolean(event.metaKey);
+  return false;
+}
+
+function handleGlobalKeyDown(event) {
+  if (isKeyMatch(event.key) && lastMouseEvent && !isMouseOverTooltip) {
+    processMouseMove(lastMouseEvent);
+  }
+}
+
+function handleGlobalKeyUp(event) {
+  if (isKeyMatch(event.key) && !isMouseOverTooltip) {
+    scheduleHideTooltip();
+  }
+}
+
+function isKeyMatch(key) {
+  if (currentModifierKey === 'Shift' && key === 'Shift') return true;
+  if (currentModifierKey === 'Alt' && key === 'Alt') return true;
+  if (currentModifierKey === 'Control' && key === 'Control') return true;
+  if (currentModifierKey === 'Meta' && key === 'Meta') return true;
+  return false;
 }
 
 if (document.body) {
@@ -204,53 +263,7 @@ function injectTooltipStyles() {
   document.head.appendChild(style);
 }
 
-async function loadDictionary() {
-  try {
-    const response = await fetch(DICTIONARY_URL);
-    if (!response.ok) {
-      throw new Error(`Dictionary load failed: ${response.status} ${response.statusText}`);
-    }
 
-    const data = await response.json();
-    dictionaryEntries = Array.isArray(data.words) ? data.words : [];
-    dictionaryIndex = buildDictionaryIndex(dictionaryEntries);
-    dictionaryReady = true;
-    dictionaryLoadError = '';
-    rerenderCurrentTooltip();
-  } catch (error) {
-    dictionaryEntries = [];
-    dictionaryIndex = { bySurface: new Map(), byBase: new Map() };
-    dictionaryReady = false;
-    dictionaryLoadError = error.message;
-    rerenderCurrentTooltip();
-  }
-}
-
-function buildDictionaryIndex(entries) {
-  const bySurface = new Map();
-  const byBase = new Map();
-
-  for (const entry of entries) {
-    const surface = normalizeText(entry.surface || '');
-    const base = normalizeText(entry.base || '');
-
-    if (surface) {
-      if (!bySurface.has(surface)) {
-        bySurface.set(surface, []);
-      }
-      bySurface.get(surface).push(entry);
-    }
-
-    if (base) {
-      if (!byBase.has(base)) {
-        byBase.set(base, []);
-      }
-      byBase.get(base).push(entry);
-    }
-  }
-
-  return { bySurface, byBase };
-}
 
 function attachHoverListeners(root) {
   if (!root || root._munmekHoverAttached) {
@@ -281,7 +294,39 @@ function scanForShadowRoots() {
   });
 }
 
+let mouseMoveScheduled = false;
+let lastMouseEvent = null;
+
 function handleMouseMove(event) {
+  lastMouseEvent = event;
+
+  if (isMouseOverTooltip) {
+    return;
+  }
+
+  if (!isModifierPressed(event)) {
+    if (tooltip && tooltip.style.display === 'block') {
+      scheduleHideTooltip();
+    }
+    return;
+  }
+
+  if (!mouseMoveScheduled) {
+    mouseMoveScheduled = true;
+    requestAnimationFrame(() => {
+      mouseMoveScheduled = false;
+      if (lastMouseEvent) {
+        processMouseMove(lastMouseEvent);
+      }
+    });
+  }
+}
+
+function processMouseMove(event) {
+  if (isMouseOverTooltip) {
+    return;
+  }
+
   const range = getRangeFromPoint(event.view?.document || document, event.clientX, event.clientY);
   const hoverContext = extractHoverContext(range);
 
@@ -294,16 +339,113 @@ function handleMouseMove(event) {
   const signature = `${hoverState.word}|${hoverState.sentenceKey}`;
 
   if (signature === lastHoverSignature && tooltip && tooltip.style.display === 'block') {
+    cancelHideTooltip();
     lastTooltipPosition = { x: event.clientX, y: event.clientY };
     positionTooltip(event.clientX, event.clientY);
     currentHoverState = hoverState;
+    triggerIndexedDbLookup(hoverState);
     return;
   }
 
+  cancelHideTooltip();
   lastHoverSignature = signature;
   currentHoverState = hoverState;
   lastTooltipPosition = { x: event.clientX, y: event.clientY };
   renderTooltip(hoverState);
+
+  // Trigger IndexedDB lookup and ONNX neural reranking
+  triggerIndexedDbLookup(hoverState);
+  triggerProgressiveReranking(hoverState);
+}
+
+async function triggerIndexedDbLookup(state) {
+  if (!state || !state.word) return;
+
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+    try {
+      const candidates = state.candidateList || generateCandidates(state.word, state.sentence);
+      for (const candidate of candidates) {
+        let res = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({
+            type: 'dictionaryLookup',
+            method: 'lookupSurface',
+            text: candidate.text,
+            dictId: currentSelectedDictionaryId
+          }, resolve);
+        });
+
+        if (res && res.hits && res.hits.length > 0) {
+          if (currentHoverState && currentHoverState.word === state.word) {
+            const sortedHits = sortHitsByBaseForm(res.hits);
+            currentHoverState.dictionaryEntries = sortedHits;
+            currentHoverState.dictionaryEntry = sortedHits[0];
+            currentHoverState.dictionaryMatch = candidate.text;
+            currentHoverState.selectedGroupIndex = 0;
+            currentHoverState.lookupReason = `IndexedDB Surface Match (${sortedHits[0].dictTitle || 'Local'})`;
+            rerenderCurrentTooltip();
+          }
+          return;
+        }
+
+        res = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({
+            type: 'dictionaryLookup',
+            method: 'lookupBase',
+            text: candidate.text,
+            dictId: currentSelectedDictionaryId
+          }, resolve);
+        });
+
+        if (res && res.hits && res.hits.length > 0) {
+          if (currentHoverState && currentHoverState.word === state.word) {
+            const sortedHits = sortHitsByBaseForm(res.hits);
+            currentHoverState.dictionaryEntries = sortedHits;
+            currentHoverState.dictionaryEntry = sortedHits[0];
+            currentHoverState.dictionaryMatch = candidate.text;
+            currentHoverState.selectedGroupIndex = 0;
+            currentHoverState.lookupReason = `IndexedDB Base Match (${sortedHits[0].dictTitle || 'Local'})`;
+            rerenderCurrentTooltip();
+          }
+          return;
+        }
+      }
+
+      // No offline dictionary hits found. Update reason.
+      if (currentHoverState && currentHoverState.word === state.word && (!currentHoverState.dictionaryEntries || currentHoverState.dictionaryEntries.length === 0)) {
+        currentHoverState.lookupReason = 'No offline dictionary match found. Click a candidate chip above for Quick LLM Lookup.';
+      }
+    } catch (err) {
+      console.warn('[Munmek] IndexedDB lookup notice:', err);
+    }
+  }
+}
+
+function triggerProgressiveReranking(state) {
+  if (!state || !state.candidateList || state.candidateList.length <= 1 || !state.sentence) return;
+
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+    chrome.runtime.sendMessage(
+      {
+        type: 'rerankKoreanCandidates',
+        candidates: state.candidateList,
+        sentenceContext: state.sentence
+      },
+      (response) => {
+        if (response && response.ok && Array.isArray(response.candidates) && response.candidates.length > 0 && !response.disabled) {
+          if (currentHoverState && currentHoverState.word === state.word) {
+            const updatedLookup = findBestDictionaryEntryFromCandidates(response.candidates, state.word);
+            currentHoverState.candidateList = response.candidates;
+            if (updatedLookup.entry) {
+              currentHoverState.dictionaryEntry = updatedLookup.entry;
+              currentHoverState.dictionaryMatch = updatedLookup.match;
+              currentHoverState.lookupReason = updatedLookup.reason || 'KoELECTRA Neural Reranked';
+            }
+            rerenderCurrentTooltip();
+          }
+        }
+      }
+    );
+  }
 }
 
 function getRangeFromPoint(doc, x, y) {
@@ -361,15 +503,45 @@ function extractHoverContext(range) {
     return null;
   }
 
-  const paragraphText = normalizeText(node.parentElement?.textContent || textContent);
-  const sentenceWindow = getSentenceWindow(paragraphText, word);
+  let containerEl = node.parentElement;
+  let asbplayerContainer = null;
+  const blockTags = new Set(['P', 'DIV', 'LI', 'SECTION', 'ARTICLE', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'MAIN']);
+
+  while (containerEl && containerEl !== document.body) {
+    if (
+      containerEl.classList &&
+      Array.from(containerEl.classList).some((cls) => cls.includes('asbplayer-subtitles') || cls.includes('asbplayer-subtitle'))
+    ) {
+      asbplayerContainer = containerEl;
+      break;
+    }
+    if (blockTags.has(containerEl.tagName)) {
+      break;
+    }
+    containerEl = containerEl.parentElement;
+  }
+
+  const paragraphText = normalizeText((asbplayerContainer || containerEl || node.parentElement)?.textContent || textContent);
+  let sentenceWindow = getSentenceWindow(paragraphText, word);
+
+  if (window._munmekTabContextText) {
+    const tabWindow = getSentenceWindow(window._munmekTabContextText, word);
+    if (tabWindow && tabWindow.currentSentence && tabWindow.currentSentence !== word) {
+      sentenceWindow = {
+        currentSentence: sentenceWindow.currentSentence || tabWindow.currentSentence,
+        prevSentence: tabWindow.prevSentence || sentenceWindow.prevSentence,
+        nextSentence: tabWindow.nextSentence || sentenceWindow.nextSentence
+      };
+    }
+  }
 
   return {
     word,
     sentence: sentenceWindow.currentSentence,
     prevSentence: sentenceWindow.prevSentence,
     nextSentence: sentenceWindow.nextSentence,
-    paragraphText
+    paragraphText,
+    isAsbplayerSubtitle: Boolean(asbplayerContainer)
   };
 }
 
@@ -414,7 +586,7 @@ function getSentenceWindow(text, sentenceFragment) {
 function buildHoverState(context, x, y) {
   const word = normalizeText(context.word);
   const sentence = normalizeText(context.sentence);
-  const lookup = findBestDictionaryEntry(word);
+  const lookup = findBestDictionaryEntry(word, sentence);
   const sentenceKey = normalizeText(sentence || word);
 
   return {
@@ -434,40 +606,37 @@ function buildHoverState(context, x, y) {
   };
 }
 
-function findBestDictionaryEntry(surface) {
-  const candidates = generateCandidates(surface);
+let currentSelectedDictionaryId = 'all';
 
-  for (const candidate of candidates) {
-    const surfaceHits = dictionaryIndex.bySurface.get(candidate.text);
-    if (surfaceHits && surfaceHits.length > 0) {
-      return {
-        entry: surfaceHits[0],
-        match: candidate.text,
-        candidates,
-        reason: candidate.reason
-      };
-    }
-
-    const baseHits = dictionaryIndex.byBase.get(candidate.text);
-    if (baseHits && baseHits.length > 0) {
-      return {
-        entry: baseHits[0],
-        match: candidate.text,
-        candidates,
-        reason: candidate.reason
-      };
-    }
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+  chrome.storage.local.get(['selectedDictionaryId'], (res) => {
+    if (res && res.selectedDictionaryId) currentSelectedDictionaryId = res.selectedDictionaryId;
+  });
+  if (chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes) => {
+      if (changes.selectedDictionaryId) currentSelectedDictionaryId = changes.selectedDictionaryId.newValue || 'all';
+    });
   }
+}
 
+function findBestDictionaryEntry(surface, sentenceContext = '') {
+  const candidates = generateCandidates(surface, sentenceContext);
   return {
     entry: null,
     match: '',
-    candidates,
-    reason: candidates.length > 0 ? candidates[0].reason : 'No candidate match'
+    reason: 'Looking up in IndexedDB...',
+    candidates
   };
 }
 
-function generateCandidates(surface) {
+function generateCandidates(surface, sentenceContext = '') {
+  if (typeof window !== 'undefined' && window.KoreanPipeline) {
+    const pipelineResults = window.KoreanPipeline.analyzeKoreanWord(surface, sentenceContext);
+    if (pipelineResults && pipelineResults.length > 0) {
+      return pipelineResults;
+    }
+  }
+
   const candidates = [];
   const push = (text, reason, score) => {
     const normalized = normalizeText(text);
@@ -518,18 +687,72 @@ function generateCandidates(surface) {
   return candidates;
 }
 
+const pendingQuickFallbacks = new Map();
+
+function triggerQuickGeminiFallback(state) {
+  if (!state || !state.word || pendingQuickFallbacks.has(state.word)) return;
+  const bestCandidate = (state.candidateList && state.candidateList[0]) ? state.candidateList[0].text : state.word;
+
+  pendingQuickFallbacks.set(state.word, true);
+
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+    chrome.runtime.sendMessage(
+      {
+        type: 'quickGeminiFallback',
+        data: {
+          word: bestCandidate,
+          sentence: state.sentence
+        }
+      },
+      (res) => {
+        pendingQuickFallbacks.delete(state.word);
+        if (res && res.data && currentHoverState && currentHoverState.word === state.word) {
+          currentHoverState.quickFallback = res.data;
+          rerenderCurrentTooltip();
+        }
+      }
+    );
+  }
+}
+
 function renderTooltip(state) {
   ensureTooltip();
 
   const analysis = sentenceAnalysisCache.get(state.sentenceKey) || null;
+  let dictHtml = '';
+
+  if (Array.isArray(state.dictionaryEntries) && state.dictionaryEntries.length > 0) {
+    dictHtml = renderDictionaryEntriesGrouped(state.dictionaryEntries, state.dictionaryMatch || state.lookupReason);
+  } else if (state.quickFallback) {
+    dictHtml = renderGeminiFallbackEntry(state.quickFallback, state.word || state.dictionaryMatch);
+  } else if (analysis) {
+    const norm = normalizeGeminiAnalysis(analysis);
+    if (norm && (norm.translation || norm.hanja)) {
+      dictHtml = renderGeminiFallbackEntry(norm, state.word || state.dictionaryMatch);
+    } else {
+      dictHtml = renderDictionaryCandidates(state.candidateList, state.lookupReason);
+    }
+  } else {
+    dictHtml = renderDictionaryCandidates(state.candidateList, state.lookupReason);
+  }
+
+  const candidateChipsHtml = Array.isArray(state.candidateList) && state.candidateList.length > 0
+    ? `<div class="chips" style="margin-bottom: 10px;">
+        ${state.candidateList.slice(0, 4).map((c) => {
+          const isActive = state.dictionaryMatch === c.text;
+          return `<button type="button" class="chip" data-candidate="${escapeHtml(c.text)}" style="cursor: pointer; border: 1px solid ${isActive ? '#2f5d62' : 'transparent'}; background: ${isActive ? '#2f5d62' : '#e4f0ee'}; color: ${isActive ? '#fff' : '#17383b'}; padding: 4px 10px;">${escapeHtml(c.text)}</button>`;
+        }).join('')}
+       </div>`
+    : '';
+
   const html = [
     `<div class="title">${escapeHtml(state.word || '...')}</div>`,
+    dictHtml,
+    candidateChipsHtml,
     state.sentence ? `<div class="subtitle">${escapeHtml(truncate(state.sentence, 180))}</div>` : '',
-    state.dictionaryEntry ? renderDictionaryEntry(state.dictionaryEntry, state.dictionaryMatch || state.lookupReason) : renderDictionaryCandidates(state.candidateList, state.lookupReason),
     renderActions(state, Boolean(analysis)),
     renderAnalysisSection(analysis),
-    state.feedback ? `<div class="feedback ${state.feedbackType === 'error' ? 'error' : ''}">${escapeHtml(state.feedback)}</div>` : '',
-    dictionaryLoadError ? `<div class="feedback error">Dictionary load error: ${escapeHtml(dictionaryLoadError)}</div>` : ''
+    state.feedback ? `<div class="feedback ${state.feedbackType === 'error' ? 'error' : ''}">${escapeHtml(state.feedback)}</div>` : ''
   ].filter(Boolean).join('');
 
   tooltip.innerHTML = html;
@@ -537,19 +760,161 @@ function renderTooltip(state) {
   positionTooltip(state.x, state.y);
 }
 
-function renderDictionaryEntry(entry, matchLabel) {
-  const definitions = Array.isArray(entry.definitions) ? entry.definitions : [];
-  const chips = [entry.pos, entry.type, matchLabel].filter(Boolean).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
+function groupEntriesByDictTitle(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  const groups = [];
+  const map = new Map();
+
+  entries.forEach((entry) => {
+    const title = entry.dictTitle || 'Imported Dictionary';
+    if (!map.has(title)) {
+      const g = { title, items: [] };
+      map.set(title, g);
+      groups.push(g);
+    }
+    map.get(title).items.push(entry);
+  });
+
+  return groups;
+}
+
+function renderDictionaryEntriesGrouped(entries, matchLabel) {
+  const dictGroups = groupEntriesByDictTitle(entries);
+  if (dictGroups.length === 0) return '<div class="section empty">No definitions available.</div>';
+
+  const selectedGroupIdx = (currentHoverState && typeof currentHoverState.selectedGroupIndex === 'number')
+    ? currentHoverState.selectedGroupIndex
+    : 0;
+  const validGroupIdx = (selectedGroupIdx >= 0 && selectedGroupIdx < dictGroups.length) ? selectedGroupIdx : 0;
+  const activeGroup = dictGroups[validGroupIdx];
+
+  let topTabsHtml = '';
+  if (dictGroups.length > 1) {
+    topTabsHtml = `<div class="dict-group-tabs" style="display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap;">
+      ${dictGroups.map((g, idx) => {
+        const isActive = idx === validGroupIdx;
+        return `<button type="button" class="dict-group-tab" data-action="select-dict-group-tab" data-group-index="${idx}" style="cursor: pointer; font-size: 0.78rem; font-weight: 700; padding: 4px 12px; border-radius: 8px; border: 1px solid ${isActive ? '#2f5d62' : '#ddd3c4'}; background: ${isActive ? '#2f5d62' : '#fff'}; color: ${isActive ? '#fff' : '#4f463a'};">Dict: ${escapeHtml(g.title)}</button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  const itemsHtml = activeGroup.items.map((entry, itemIdx) => renderSingleEntryCard(entry, matchLabel, itemIdx)).join('');
 
   return `
-    <div class="section entry-box">
+    <div class="dictionary-container">
+      ${topTabsHtml}
+      ${itemsHtml}
+    </div>
+  `;
+}
+
+function formatDefinitionText(rawDef) {
+  if (!rawDef || typeof rawDef !== 'string') return '';
+  let str = rawDef.trim();
+  // Separate headword translation ending with 。 or 】 before explanation sentence
+  str = str.replace(/([。】])(?=[^\s。】\d\n])/g, '$1\n');
+  // Format Sentence / 文型 patterns onto new lines
+  str = str.replace(/\s*(文型|Sentence\s*\d*:?)/gi, '\n$1 ').trim();
+  // Separate camelCase word transitions (e.g. gestureTo -> gesture\nTo)
+  str = str.replace(/(?<=[a-z가-힣])(?=[A-Z])/g, '\n');
+  return str;
+}
+
+function splitEmbeddedDefinitions(defList) {
+  if (!Array.isArray(defList) || defList.length === 0) return [];
+  const result = [];
+
+  defList.forEach((defStr) => {
+    if (!defStr || typeof defStr !== 'string') return;
+    const subDefs = defStr.split(/(?<=\D|^)(?=\b\d{1,2}[\.\)]\s+)/g);
+    subDefs.forEach((sub) => {
+      let cleaned = sub.trim();
+      if (!cleaned) return;
+      cleaned = cleaned.replace(/^[\d]+[\.\)]\s*/, '').trim();
+      if (cleaned && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ\u3040-\u30ff\u4e00-\u9faf]/.test(cleaned)) {
+        result.push(formatDefinitionText(cleaned));
+      }
+    });
+  });
+
+  return result.length > 0 ? result : defList.map(formatDefinitionText);
+}
+
+function sortHitsByBaseForm(hits) {
+  if (!Array.isArray(hits) || hits.length <= 1) return hits;
+  return [...hits].sort((a, b) => {
+    const isBaseA = (a.surface || a.base || '').endsWith('다');
+    const isBaseB = (b.surface || b.base || '').endsWith('다');
+    if (isBaseA && !isBaseB) return -1;
+    if (!isBaseA && isBaseB) return 1;
+    return 0;
+  });
+}
+
+function renderSingleEntryCard(entry, matchLabel, itemIndex = 0) {
+  const rawDefinitions = Array.isArray(entry.definitions) ? entry.definitions : [];
+  const definitions = splitEmbeddedDefinitions(rawDefinitions);
+  const selectedIndexKey = `selectedDefIndex_${itemIndex}`;
+  const selectedIndex = (currentHoverState && typeof currentHoverState[selectedIndexKey] === 'number')
+    ? currentHoverState[selectedIndexKey]
+    : 0;
+
+  const validIndex = (selectedIndex >= 0 && selectedIndex < definitions.length) ? selectedIndex : 0;
+  const selectedDef = definitions[validIndex] || '';
+
+  const chips = [entry.pos, entry.type, matchLabel].filter(Boolean).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
+
+  const tabsHtml = definitions.length > 1
+    ? `<div class="def-tabs" style="display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; padding-bottom: 4px;">
+        ${definitions.map((def, idx) => {
+          const isActive = idx === validIndex;
+          const shortText = truncate(def, 22);
+          return `<button type="button" class="def-tab" data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76rem; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid ${isActive ? '#2f5d62' : '#ddd3c4'}; background: ${isActive ? '#2f5d62' : '#fff'}; color: ${isActive ? '#fff' : '#4f463a'};">Def ${idx + 1}: ${escapeHtml(shortText)}</button>`;
+        }).join('')}
+       </div>`
+    : '';
+
+  const definitionBoxHtml = definitions.length > 0
+    ? `<div class="section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <div class="label" style="margin: 0;">Definition ${definitions.length > 1 ? `(${validIndex + 1} of ${definitions.length})` : ''}</div>
+          <button type="button" class="chip" data-action="anki-def" data-item-index="${itemIndex}" data-def-index="${validIndex}" title="Add or update this specific definition in Anki" style="cursor: pointer; font-size: 0.76rem; padding: 2px 8px; border: none; background: #2f5d62; color: #fff; border-radius: 6px;">+ Anki</button>
+        </div>
+        ${tabsHtml}
+        <div style="font-size: 0.94rem; font-weight: 500; color: #1e1b16; background: #faf7f2; border: 1px solid #eadfce; border-left: 4px solid #2f5d62; border-radius: 8px; padding: 10px 12px; line-height: 1.5; white-space: pre-line;">
+          ${escapeHtml(selectedDef)}
+        </div>
+       </div>`
+    : '<div class="section empty">No definition text available.</div>';
+
+  return `
+    <div class="section entry-box" style="border-left: 4px solid #2f5d62; padding-left: 12px; background: #faf7f2; border-radius: 8px; border: 1px solid #eadfce; margin-bottom: 8px;">
       <div class="entry-head">
-        <div class="entry-word">${escapeHtml(entry.surface || '')}${entry.base && entry.base !== entry.surface ? ` <span class="muted">(${escapeHtml(entry.base)})</span>` : ''}</div>
+        <div class="entry-word" style="font-weight: 700;">${escapeHtml(entry.surface || '')}${entry.base && entry.base !== entry.surface ? ` <span class="muted">(${escapeHtml(entry.base)})</span>` : ''}</div>
       </div>
-      <div class="chips">${chips}</div>
+      ${chips ? `<div class="chips" style="margin-top: 4px; margin-bottom: 6px;">${chips}</div>` : ''}
+      ${definitionBoxHtml}
       ${entry.hanja ? `<div class="section"><div class="label">Hanja</div><div>${escapeHtml(entry.hanja)}</div></div>` : ''}
-      ${definitions.length > 0 ? `<div class="section"><div class="label">Definition</div><ul>${definitions.map((definition) => `<li>${escapeHtml(definition)}</li>`).join('')}</ul></div>` : '<div class="section empty">No definition text in the local sample dictionary yet.</div>'}
       ${entry.grammar_notes ? `<div class="section"><div class="label">Notes</div><div>${escapeHtml(entry.grammar_notes)}</div></div>` : ''}
+    </div>
+  `;
+}
+
+function renderGeminiFallbackEntry(norm, word) {
+  return `
+    <div class="section entry-box" style="border-left: 4px solid #d97706; padding-left: 12px; background: #fffbeb; border-radius: 8px; border: 1px solid #fef3c7; margin-bottom: 8px;">
+      <div class="entry-head">
+        <div class="entry-word">${escapeHtml(word || '')}</div>
+      </div>
+      <div class="chips"><span class="chip" style="background:#d97706; color:#fff; font-weight:700;">Quick LLM Lookup</span></div>
+      <div class="section">
+        <div class="label">Definition / Translation</div>
+        <div style="font-size: 0.94rem; font-weight: 500; color: #1e1b16; background: #fff; border: 1px solid #fcd34d; border-radius: 8px; padding: 10px 12px; line-height: 1.5; white-space: pre-line;">
+          ${escapeHtml(formatDefinitionText(norm.translation || 'No definition available.'))}
+        </div>
+      </div>
+      ${norm.hanja ? `<div class="section"><div class="label">Hanja</div><div>${escapeHtml(norm.hanja)}</div></div>` : ''}
+      ${norm.grammar ? `<div class="section"><div class="label">Grammar Notes</div><div>${escapeHtml(norm.grammar)}</div></div>` : ''}
     </div>
   `;
 }
@@ -558,9 +923,9 @@ function renderDictionaryCandidates(candidates, reason) {
   const limited = candidates.slice(0, 4);
   return `
     <div class="section entry-box">
-      <div class="label">Local lookup</div>
-      <div class="empty">${escapeHtml(reason || 'No exact dictionary hit yet.')}.</div>
-      <div class="chips">
+      <div class="label">Termbank Search</div>
+      <div class="empty">${escapeHtml(reason || 'No exact dictionary match found.')}</div>
+      <div class="chips" style="margin-top: 6px;">
         ${limited.map((candidate) => `<span class="chip">${escapeHtml(candidate.text)}</span>`).join('')}
       </div>
     </div>
@@ -571,70 +936,167 @@ function renderActions(state, hasCachedAnalysis) {
   const aiLabel = hasCachedAnalysis ? 'Refresh Gemini' : 'Ask Gemini';
   return `
     <div class="section">
-      <div class="actions">
+      <div class="actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
         <button class="primary-button" data-action="analyze">${escapeHtml(aiLabel)}</button>
-        <button class="secondary-button" data-action="anki">Send to Anki</button>
+        <button class="secondary-button" data-action="anki-dict" title="Send selected offline dictionary definition to Anki">Send to Anki (Dict)</button>
+        <button class="secondary-button" data-action="anki-llm" style="background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; font-weight: 700;" title="Send Ask Gemini / Quick LLM definition to Anki">Send to Anki (LLM)</button>
       </div>
     </div>
   `;
 }
 
-function renderAnalysisSection(analysis) {
-  if (!analysis) {
+function normalizeGeminiAnalysis(rawAnalysis) {
+  if (!rawAnalysis || typeof rawAnalysis !== 'object') return null;
+
+  let target = rawAnalysis;
+  if (Array.isArray(target.words_analysis) && target.words_analysis.length > 0) {
+    target = target.words_analysis[0];
+  } else if (Array.isArray(target.analysis) && target.analysis.length > 0) {
+    target = target.analysis[0];
+  } else if (target.analysis && typeof target.analysis === 'object') {
+    target = target.analysis;
+  } else if (target.data && typeof target.data === 'object') {
+    target = target.data;
+  } else if (target.results && typeof target.results === 'object') {
+    target = Array.isArray(target.results) ? target.results[0] : target.results;
+  }
+
+  if (!target || typeof target !== 'object') return null;
+
+  let translationStr = '';
+  if (typeof target.translation === 'string') {
+    translationStr = target.translation;
+  } else if (typeof target.definition === 'string') {
+    translationStr = target.definition;
+  } else if (Array.isArray(target.definitions)) {
+    translationStr = target.definitions.join('; ');
+  } else if (Array.isArray(target.meanings)) {
+    translationStr = target.meanings.join('; ');
+  }
+
+  let grammarStr = '';
+  if (typeof target.grammar === 'string') {
+    grammarStr = target.grammar;
+  } else if (typeof target.grammar_notes === 'string') {
+    grammarStr = target.grammar_notes;
+  } else if (target.conjugation && typeof target.conjugation === 'object') {
+    const ending = target.conjugation.ending ? `Ending ${target.conjugation.ending}: ` : '';
+    const exp = target.conjugation.explanation || '';
+    grammarStr = `${ending}${exp}`.trim();
+  }
+
+  let notesStr = typeof target.notes === 'string' ? target.notes : '';
+  if (target.grammar_notes && grammarStr !== target.grammar_notes) {
+    notesStr = [notesStr, target.grammar_notes].filter(Boolean).join('\n');
+  }
+
+  let hanjaStr = typeof target.hanja === 'string' ? target.hanja : '';
+
+  return {
+    translation: translationStr,
+    grammar: grammarStr,
+    notes: notesStr,
+    hanja: hanjaStr,
+    related_words: target.related_words || {},
+    examples: Array.isArray(target.examples) ? target.examples : []
+  };
+}
+
+function renderAnalysisSection(rawAnalysis) {
+  if (!rawAnalysis) {
     return '<div class="section empty">Ask Gemini for a richer, context-aware explanation.</div>';
   }
 
-  if (analysis.error) {
-    return `<div class="section feedback error">${escapeHtml(analysis.error)}</div>`;
+  if (rawAnalysis.error) {
+    return `<div class="section feedback error">${escapeHtml(rawAnalysis.error)}</div>`;
   }
 
-  const parts = [];
-  const translation = analysis.translation || analysis.definition;
-  const grammar = analysis.grammar || analysis.grammar_notes;
-  const notes = analysis.notes;
-  const hanja = analysis.hanja;
-  const relatedWords = analysis.related_words || {};
-  const examples = Array.isArray(analysis.examples) ? analysis.examples : [];
+  const wordsAnalysis = Array.isArray(rawAnalysis.words_analysis)
+    ? rawAnalysis.words_analysis
+    : (Array.isArray(rawAnalysis.words) ? rawAnalysis.words : (Array.isArray(rawAnalysis.analysis) ? rawAnalysis.analysis : null));
 
-  if (translation) {
-    parts.push(`<div><div class="label">Gemini meaning</div><div>${escapeHtml(translation)}</div></div>`);
-  }
+  if (wordsAnalysis && wordsAnalysis.length > 0) {
+    const currentWord = normalizeText(currentHoverState ? currentHoverState.word : '');
+    let targetItem = wordsAnalysis.find((item) => {
+      const s = normalizeText(item.surface || item.word || '');
+      const b = normalizeText(item.base || '');
+      if (!s && !b) return false;
+      if (s === currentWord || b === currentWord) return true;
+      if (currentWord.startsWith(s) || s.startsWith(currentWord)) return true;
+      if (currentWord.includes(s) || s.includes(currentWord)) return true;
 
-  if (grammar) {
-    parts.push(`<div><div class="label">Grammar</div><div>${escapeHtml(grammar)}</div></div>`);
-  }
+      const cleanW = currentWord.replace(/(은|는|이|가|을|를|의|에|에서|와|과|도|만|으로|로)$/, '');
+      const cleanS = s.replace(/(은|는|이|가|을|를|의|에|에서|와|과|도|만|으로|로)$/, '');
+      return cleanW && cleanS && cleanW === cleanS;
+    });
 
-  if (hanja) {
-    parts.push(`<div><div class="label">Hanja</div><div>${escapeHtml(hanja)}</div></div>`);
-  }
-
-  if (notes) {
-    parts.push(`<div><div class="label">Notes</div><div>${escapeHtml(notes)}</div></div>`);
-  }
-
-  if (relatedWords.synonyms || relatedWords.antonyms) {
-    const synonymList = Array.isArray(relatedWords.synonyms) ? relatedWords.synonyms : [];
-    const antonymList = Array.isArray(relatedWords.antonyms) ? relatedWords.antonyms : [];
-    if (synonymList.length > 0 || antonymList.length > 0) {
-      parts.push(`
-        <div>
-          <div class="label">Related words</div>
-          ${synonymList.length > 0 ? `<div class="muted">Synonyms: ${escapeHtml(synonymList.join(', '))}</div>` : ''}
-          ${antonymList.length > 0 ? `<div class="muted">Antonyms: ${escapeHtml(antonymList.join(', '))}</div>` : ''}
-        </div>
-      `);
+    if (!targetItem) {
+      return `<div class="section empty" style="font-size:0.86rem;">Sentence breakdown cached (${wordsAnalysis.length} words), but no entry matching "${escapeHtml(currentWord)}" was returned.</div>`;
     }
+
+    const surface = targetItem.surface || targetItem.word || '';
+    const base = targetItem.base || '';
+    const pos = targetItem.pos || '';
+    const defs = Array.isArray(targetItem.definitions) ? targetItem.definitions : (targetItem.definition ? [targetItem.definition] : []);
+    const conj = targetItem.conjugation;
+    const notes = targetItem.grammar_notes || targetItem.notes || '';
+
+    return `
+      <div class="section entry-box" style="border: 1px solid #2f5d62; background: #f4faf9; margin-top: 10px; border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin-bottom: 6px;">
+          <span style="font-weight: 700; color: #17383b; font-size: 0.96rem;">
+            Gemini: ${escapeHtml(surface)} ${base && base !== surface ? `<span class="muted" style="font-weight:400;">(${escapeHtml(base)})</span>` : ''}
+          </span>
+          ${pos ? `<span class="chip" style="font-size: 0.74rem; background: #2f5d62; color: #fff;">${escapeHtml(pos)}</span>` : ''}
+        </div>
+
+        ${defs.length > 0
+          ? `<ul style="margin: 4px 0 6px 18px; padding: 0; color: #1e1b16; font-size: 0.88rem; line-height: 1.4;">
+              ${defs.map((d) => `<li><strong>${escapeHtml(d)}</strong></li>`).join('')}
+             </ul>`
+          : ''}
+
+        ${conj && typeof conj === 'object' && (conj.ending || conj.explanation)
+          ? `<div style="font-size: 0.82rem; color: #17383b; margin-top: 6px; background: #e4f0ee; padding: 6px 10px; border-radius: 8px;">
+              <strong>Grammar:</strong> ${conj.ending ? `Ending <code>${escapeHtml(conj.ending)}</code> — ` : ''}${escapeHtml(conj.explanation || '')}
+             </div>`
+          : ''}
+
+        ${notes
+          ? `<div style="font-size: 0.82rem; color: #4f463a; margin-top: 6px; font-style: italic; background: #fff; padding: 6px 10px; border-radius: 8px; border: 1px solid #eadfce;">
+              <strong>Context Note:</strong> ${escapeHtml(notes)}
+             </div>`
+          : ''}
+
+        ${(() => {
+          const reservedKeys = new Set(['words_analysis', 'words', 'analysis', 'surface', 'word', 'base', 'pos', 'definitions', 'definition', 'conjugation', 'notes', 'grammar_notes', 'id']);
+          const customCards = [];
+          const scanObj = (obj) => {
+            if (!obj || typeof obj !== 'object') return;
+            for (const [k, v] of Object.entries(obj)) {
+              if (!reservedKeys.has(k) && v) {
+                const title = k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+                const valStr = typeof v === 'string' ? v : (Array.isArray(v) ? v.join('; ') : JSON.stringify(v));
+                customCards.push(`
+                  <div style="font-size: 0.82rem; color: #17383b; margin-top: 6px; background: #e8f3f1; padding: 6px 10px; border-radius: 8px; border: 1px solid #bce0da;">
+                    <strong>${escapeHtml(title)}:</strong> ${escapeHtml(valStr)}
+                  </div>
+                `);
+              }
+            }
+          };
+          scanObj(rawAnalysis);
+          scanObj(targetItem);
+          return customCards.join('');
+        })()}
+      </div>
+    `;
   }
 
-  if (examples.length > 0) {
-    parts.push(`<div><div class="label">Examples</div><ul>${examples.map((example) => `<li>${escapeHtml(example)}</li>`).join('')}</ul></div>`);
+  const normalized = normalizeGeminiAnalysis(rawAnalysis);
+  if (!normalized) {
+    return '<div class="section empty">No structural breakdown returned.</div>';
   }
-
-  if (parts.length === 0) {
-    parts.push(`<div class="empty">${escapeHtml(JSON.stringify(analysis, null, 2))}</div>`);
-  }
-
-  return `<div class="section entry-box">${parts.join('')}</div>`;
 }
 
 function ensureTooltip() {
@@ -645,8 +1107,14 @@ function ensureTooltip() {
   tooltip = document.createElement('div');
   tooltip.id = TOOLTIP_ID;
   tooltip.className = 'munmek-tooltip';
-  tooltip.addEventListener('mouseenter', cancelHideTooltip);
-  tooltip.addEventListener('mouseleave', scheduleHideTooltip);
+  tooltip.addEventListener('mouseenter', () => {
+    isMouseOverTooltip = true;
+    cancelHideTooltip();
+  });
+  tooltip.addEventListener('mouseleave', () => {
+    isMouseOverTooltip = false;
+    scheduleHideTooltip();
+  });
   tooltip.addEventListener('click', handleTooltipClick);
   document.body.appendChild(tooltip);
 }
@@ -657,8 +1125,111 @@ function handleTooltipClick(event) {
     return;
   }
 
+  const selectedCandidate = target.getAttribute('data-candidate');
+  if (selectedCandidate && currentHoverState) {
+    currentHoverState.dictionaryMatch = selectedCandidate;
+    currentHoverState.word = selectedCandidate;
+    currentHoverState.selectedDefinitionIndex = 0;
+    currentHoverState.selectedGroupIndex = 0;
+
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({
+        type: 'dictionaryLookup',
+        method: 'lookupSurface',
+        text: selectedCandidate,
+        dictId: currentSelectedDictionaryId
+      }, (res) => {
+        if (res && res.hits && res.hits.length > 0) {
+          if (currentHoverState) {
+            currentHoverState.dictionaryEntries = res.hits;
+            currentHoverState.dictionaryEntry = res.hits[0];
+            currentHoverState.lookupReason = `Selected Candidate (${res.hits[0].dictTitle || 'Local'})`;
+            rerenderCurrentTooltip();
+          }
+        } else {
+          chrome.runtime.sendMessage({
+            type: 'dictionaryLookup',
+            method: 'lookupBase',
+            text: selectedCandidate,
+            dictId: currentSelectedDictionaryId
+          }, (resBase) => {
+            if (resBase && resBase.hits && resBase.hits.length > 0 && currentHoverState) {
+              currentHoverState.dictionaryEntries = resBase.hits;
+              currentHoverState.dictionaryEntry = resBase.hits[0];
+              currentHoverState.lookupReason = `Selected Candidate (${resBase.hits[0].dictTitle || 'Local'})`;
+              rerenderCurrentTooltip();
+            } else if (currentHoverState) {
+              currentHoverState.dictionaryEntries = [];
+              currentHoverState.dictionaryEntry = null;
+              currentHoverState.lookupReason = `Selected candidate "${selectedCandidate}" (No offline match, running Quick LLM Lookup...)`;
+              rerenderCurrentTooltip();
+              triggerQuickGeminiFallback(currentHoverState);
+            }
+          });
+        }
+      });
+    }
+    return;
+  }
+
   const action = target.getAttribute('data-action');
   if (!action || !currentHoverState) {
+    return;
+  }
+
+  if (action === 'upload-context') {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.txt,.srt,.vtt,.json';
+    fileInput.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        window._munmekTabContextText = evt.target.result || '';
+        window._munmekTabContextName = file.name;
+        if (currentHoverState) {
+          currentHoverState.feedback = `Loaded tab context file: ${file.name}`;
+          currentHoverState.feedbackType = 'info';
+          rerenderCurrentTooltip();
+        }
+      };
+      reader.readAsText(file);
+    };
+    fileInput.click();
+    return;
+  }
+
+  if (action === 'select-dict-group-tab') {
+    const idx = parseInt(target.getAttribute('data-group-index'), 10);
+    if (currentHoverState) {
+      currentHoverState.selectedGroupIndex = idx;
+      const dictGroups = groupEntriesByDictTitle(currentHoverState.dictionaryEntries || []);
+      if (dictGroups[idx] && dictGroups[idx].items[0]) {
+        currentHoverState.dictionaryEntry = dictGroups[idx].items[0];
+      }
+      rerenderCurrentTooltip();
+    }
+    return;
+  }
+
+  if (action === 'select-def-tab') {
+    const idxStr = target.getAttribute('data-def-index');
+    const itemIdxStr = target.getAttribute('data-item-index') || '0';
+    if (idxStr !== null && currentHoverState) {
+      const itemIdx = Number(itemIdxStr);
+      const defIdx = Number(idxStr);
+      currentHoverState[`selectedDefIndex_${itemIdx}`] = defIdx;
+
+      const dictGroups = groupEntriesByDictTitle(currentHoverState.dictionaryEntries || []);
+      const selectedGroupIdx = currentHoverState.selectedGroupIndex || 0;
+      const activeGroup = dictGroups[selectedGroupIdx];
+      if (activeGroup && activeGroup.items[itemIdx]) {
+        currentHoverState.dictionaryEntry = activeGroup.items[itemIdx];
+        currentHoverState.selectedDefinitionIndex = defIdx;
+      }
+      rerenderCurrentTooltip();
+    }
     return;
   }
 
@@ -666,16 +1237,55 @@ function handleTooltipClick(event) {
     requestSentenceAnalysis(currentHoverState);
   }
 
-  if (action === 'anki') {
-    sendCardToAnki(currentHoverState);
+  if (action === 'anki' || action === 'anki-dict') {
+    const definitions = currentHoverState.dictionaryEntry?.definitions || [];
+    const idx = currentHoverState.selectedDefinitionIndex || 0;
+    const rawDefs = Array.isArray(definitions) ? definitions : [];
+    const splitDefs = splitEmbeddedDefinitions(rawDefs);
+    const selectedDef = splitDefs[idx] || (rawDefs[idx] || null);
+    sendCardToAnki(currentHoverState, selectedDef, 'dict');
+  }
+
+  if (action === 'anki-llm') {
+    const cachedAnalysis = sentenceAnalysisCache.get(currentHoverState.sentenceKey);
+    if (cachedAnalysis || currentHoverState.quickFallback) {
+      sendCardToAnki(currentHoverState, null, 'llm');
+    } else {
+      currentHoverState.feedback = 'Fetching Gemini LLM analysis for Anki card...';
+      currentHoverState.feedbackType = 'info';
+      rerenderCurrentTooltip();
+      requestSentenceAnalysis(currentHoverState, () => {
+        sendCardToAnki(currentHoverState, null, 'llm');
+      });
+    }
+  }
+
+  if (action === 'anki-def') {
+    const defIndexStr = target.getAttribute('data-def-index');
+    const itemIdxStr = target.getAttribute('data-item-index') || '0';
+    const itemIdx = Number(itemIdxStr);
+    const defIndex = defIndexStr !== null ? Number(defIndexStr) : 0;
+
+    const dictGroups = groupEntriesByDictTitle(currentHoverState.dictionaryEntries || []);
+    const selectedGroupIdx = currentHoverState.selectedGroupIndex || 0;
+    const activeGroup = dictGroups[selectedGroupIdx];
+    const targetEntry = (activeGroup && activeGroup.items[itemIdx]) || currentHoverState.dictionaryEntry;
+
+    const rawDefs = Array.isArray(targetEntry?.definitions) ? targetEntry.definitions : [];
+    const splitDefs = splitEmbeddedDefinitions(rawDefs);
+    const selectedDef = splitDefs[defIndex] || (rawDefs[defIndex] || null);
+
+    currentHoverState.dictionaryEntry = targetEntry;
+    sendCardToAnki(currentHoverState, selectedDef, 'dict');
   }
 }
 
-function requestSentenceAnalysis(state) {
+function requestSentenceAnalysis(state, onSuccess = null) {
   if (sentenceAnalysisCache.has(state.sentenceKey) && !pendingAnalysisRequests.has(state.sentenceKey)) {
     currentHoverState.feedback = 'Using cached Gemini analysis for this sentence.';
     currentHoverState.feedbackType = 'info';
     renderTooltip(currentHoverState);
+    if (typeof onSuccess === 'function') onSuccess();
     return;
   }
 
@@ -725,11 +1335,12 @@ function requestSentenceAnalysis(state) {
       currentHoverState.feedback = 'Gemini analysis ready.';
       currentHoverState.feedbackType = 'info';
       renderTooltip(currentHoverState);
+      if (typeof onSuccess === 'function') onSuccess();
     }
   );
 }
 
-function sendCardToAnki(state) {
+function sendCardToAnki(state, selectedDefinition = null, mode = 'dict') {
   const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey) || null;
 
   currentHoverState.feedback = 'Sending card to Anki...';
@@ -744,9 +1355,11 @@ function sendCardToAnki(state) {
         sentence: state.sentence,
         prevSentence: state.prevSentence,
         nextSentence: state.nextSentence,
-        dictionaryEntry: state.dictionaryEntry,
+        dictionaryEntry: mode === 'llm' ? {} : state.dictionaryEntry,
         candidate: state.dictionaryMatch,
-        analysis: cachedAnalysis
+        analysis: cachedAnalysis,
+        quickFallback: state.quickFallback || null,
+        selectedDefinition: mode === 'llm' ? null : selectedDefinition
       }
     },
     (response) => {
@@ -838,7 +1451,35 @@ function truncate(value, maxLength) {
     return text;
   }
 
-  return `${text.slice(0, maxLength - 1)}…`;
+  return `${text.slice(0, maxLength)}...`;
+}
+
+// Add page & subtitle context extractor message listener
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'extractPageContext') {
+      const parts = [];
+
+      // Scrape ASB Player or custom subtitle elements
+      const subtitleElements = document.querySelectorAll('.asbplayer-subtitle, [class*="subtitle"], [id*="subtitle"], track');
+      subtitleElements.forEach((el) => {
+        const t = (el.textContent || '').trim();
+        if (t && !parts.includes(t)) parts.push(t);
+      });
+
+      // Scrape article paragraph content
+      const contentArea = document.querySelector('#bodyContent, article, main') || document.body;
+      const paragraphs = contentArea.querySelectorAll('p, h1, h2, h3');
+      paragraphs.forEach((p) => {
+        const t = (p.textContent || '').trim();
+        if (t && t.length > 15 && !parts.includes(t)) parts.push(t);
+      });
+
+      const fullContext = parts.join('\n\n').slice(0, 20000);
+      sendResponse({ text: fullContext, name: document.title || 'Webpage Content' });
+      return true;
+    }
+  });
 }
 
 function escapeHtml(value) {

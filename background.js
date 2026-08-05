@@ -1,34 +1,35 @@
-const DEFAULT_MODEL_ID = 'gemini-2.0-flash-lite';
-const DEFAULT_PROMPT = `You are a Korean language tutor.
-
-Return only one valid JSON object and no markdown fences.
-Use the supplied word, sentence, neighboring sentences, and dictionary candidate as context.
-
-Schema:
-{
-  "word": string,
-  "base": string,
-  "pos": string,
-  "translation": string,
-  "grammar": string,
-  "hanja": string | null,
-  "notes": string,
-  "related_words": {
-    "synonyms": string[],
-    "antonyms": string[]
-  },
-  "examples": string[]
+function ensureDictionaryDbLoaded() {
+  if (typeof self.DictionaryDB !== 'undefined') return true;
+  try {
+    importScripts('dictionary_db.js');
+    return typeof self.DictionaryDB !== 'undefined';
+  } catch (e) {
+    console.error("Failed to import dictionary_db.js", e);
+    return false;
+  }
 }
+ensureDictionaryDbLoaded();
 
-Keep the answer concise, accurate, and specific to the sentence context.`;
+const DEFAULT_MODEL_ID = 'gemini-2.0-flash-lite';
+const DEFAULT_PROMPT = `You are an expert Korean linguistic scholar and contextual analyzer.
+Analyze the Korean word '{WORD}' in the exact context of the sentence: '{SENTENCE}'.
+Context - Preceding sentence: '{PREV_SENTENCE}'.
+Context - Subsequent sentence: '{NEXT_SENTENCE}'.
+
+For EACH significant Korean word/phrase in '{SENTENCE}' (especially target '{WORD}'), provide a JSON object in the "words_analysis" array with these fields:
+- "surface": Exact word form as it appears in the sentence.
+- "base": Standard dictionary / base form.
+- "pos": Part of speech (e.g., "proper noun", "noun", "verb", "adjective", "particle", "honorific verb", "bound noun").
+- "definitions": Array of precise English definitions fitting this specific context.
+- "conjugation": (If applicable) Object with "ending" and "explanation" describing grammatical inflection, particles, or tense.
+- "grammar_notes": Provide rich, detailed contextual notes! Explain why this word is used in this sentence context, its exact role in the clause, any historical/cultural significance (e.g. historical titles, names, archaisms), tone, or grammatical nuances.
+- "id": Unique string ID.
+
+Return ONLY a single, valid JSON object with a top-level key "words_analysis". Do not include Markdown wrapping outside JSON.`;
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(['aiPrompt', 'modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'ankiUpdateLastCard'], (result) => {
+  chrome.storage.local.get(['aiPromptExtension', 'modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField'], (result) => {
     const defaults = {};
-
-    if (!result.aiPrompt) {
-      defaults.aiPrompt = 'Focus on the target word, give the clearest context-aware meaning, and keep the output strictly in JSON.';
-    }
 
     if (!result.modelId) {
       defaults.modelId = DEFAULT_MODEL_ID;
@@ -57,19 +58,53 @@ chrome.runtime.onInstalled.addListener(() => {
       defaults.ankiDefinitionField = 'Back';
     }
 
-    if (typeof result.ankiUpdateLastCard !== 'boolean') {
-      defaults.ankiUpdateLastCard = false;
-    }
-
     if (Object.keys(defaults).length > 0) {
       chrome.storage.local.set(defaults);
     }
   });
 });
 
+const activeTabContexts = {};
+let offscreenCreating = null;
+
+async function ensureOffscreenDocument() {
+  if (await chrome.offscreen.hasDocument()) {
+    return;
+  }
+
+  if (offscreenCreating) {
+    await offscreenCreating;
+    return;
+  }
+
+  offscreenCreating = chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    reasons: ['WORKERS'],
+    justification: 'Run WASM Korean morphological analyzer for instant word lookups'
+  });
+
+  await offscreenCreating;
+  offscreenCreating = null;
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'analyzeKoreanTextWasm') {
+    handleWasmAnalysisRequest(request.text, sendResponse);
+    return true;
+  }
+
+  if (request.type === 'rerankKoreanCandidates') {
+    handleRerankCandidatesRequest(request.candidates, request.sentenceContext, sendResponse);
+    return true;
+  }
+
   if (request.type === 'analyzeSentence') {
-    handleSentenceAnalysisRequest(request.data, sendResponse);
+    handleSentenceAnalysisRequest(request.data, sendResponse, sender);
+    return true;
+  }
+
+  if (request.type === 'quickGeminiFallback' || request.type === 'quickLlmLookup') {
+    handleQuickGeminiFallback(request.data, sendResponse);
     return true;
   }
 
@@ -77,22 +112,129 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     handleAnkiCardRequest(request.data, sendResponse);
     return true;
   }
+
+  if (request.type === 'clearDictCache') {
+    if (typeof self.DictionaryDB !== 'undefined' && typeof self.DictionaryDB.invalidateDictMapCache === 'function') {
+      self.DictionaryDB.invalidateDictMapCache();
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (request.type === 'dictionaryLookup') {
+    if (!ensureDictionaryDbLoaded()) {
+      sendResponse({ error: 'DictionaryDB service script is not loaded.' });
+      return true;
+    }
+    chrome.storage.local.get(['dictionaryOrder'], (res) => {
+      const order = res.dictionaryOrder || [];
+      if (request.method === 'lookupSurface') {
+        self.DictionaryDB.lookupSurface(request.text, request.dictId, order)
+          .then(hits => sendResponse({ hits }))
+          .catch(error => sendResponse({ error: error.toString() }));
+      } else if (request.method === 'lookupBase') {
+        self.DictionaryDB.lookupBase(request.text, request.dictId, order)
+          .then(hits => sendResponse({ hits }))
+          .catch(error => sendResponse({ error: error.toString() }));
+      }
+    });
+    return true;
+  }
+
+  if (request.type === 'setTabContext') {
+    const tabId = sender.tab ? sender.tab.id : request.tabId;
+    if (tabId) {
+      activeTabContexts[tabId] = {
+        name: request.name || 'Custom Context',
+        text: request.text || ''
+      };
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (request.type === 'getTabContext') {
+    const tabId = request.tabId || (sender.tab ? sender.tab.id : null);
+    const ctx = tabId ? activeTabContexts[tabId] : null;
+    sendResponse({ context: ctx || null });
+    return true;
+  }
+
+  if (request.type === 'clearTabContext') {
+    const tabId = request.tabId || (sender.tab ? sender.tab.id : null);
+    if (tabId) delete activeTabContexts[tabId];
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (request.type === 'summarizeContext') {
+    handleContextSummarization(request.text, sendResponse);
+    return true;
+  }
+
+  return false;
 });
 
-function handleSentenceAnalysisRequest(data, sendResponse) {
-  chrome.storage.local.get(['apiKey', 'modelId', 'aiPrompt'], async (config) => {
-    try {
-      if (chrome.runtime.lastError) {
-        sendResponse({ error: `Storage error: ${chrome.runtime.lastError.message}` });
-        return;
-      }
+function handleRerankCandidatesRequest(candidates, sentenceContext, sendResponse) {
+  chrome.storage.local.get(['enableOnnxReranker'], async (result) => {
+    const isEnabled = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : true;
+    if (!isEnabled) {
+      sendResponse({ ok: true, candidates: candidates || [], disabled: true });
+      return;
+    }
 
+    try {
+      await ensureOffscreenDocument();
+      chrome.runtime.sendMessage(
+        { type: 'OFFSCREEN_RERANK_CANDIDATES', candidates, sentenceContext },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          sendResponse(response || { ok: false, error: 'No response from offscreen document' });
+        }
+      );
+    } catch (err) {
+      sendResponse({ ok: false, error: err.message });
+    }
+  });
+}
+
+function handleWasmAnalysisRequest(text, sendResponse) {
+  (async () => {
+    try {
+      await ensureOffscreenDocument();
+      chrome.runtime.sendMessage(
+        { type: 'OFFSCREEN_ANALYZE_KOREAN', text },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          sendResponse(response || { ok: false, error: 'No response from offscreen document' });
+        }
+      );
+    } catch (err) {
+      sendResponse({ ok: false, error: err.message });
+    }
+  })();
+}
+
+function handleSentenceAnalysisRequest(data, sendResponse, sender) {
+  chrome.storage.local.get(['apiKey', 'modelId', 'aiPromptExtension', 'useFullContext', 'responseLanguage', 'customResponseLanguage'], async (config) => {
+    try {
       if (!config.apiKey || !config.modelId) {
         sendResponse({ error: 'API key or model ID is not configured. Open the extension settings first.' });
         return;
       }
 
-      const prompt = buildSentenceAnalysisPrompt(config.aiPrompt, data);
+      const tabId = sender && sender.tab ? sender.tab.id : null;
+      if (tabId && activeTabContexts[tabId]) {
+        data.tabContext = activeTabContexts[tabId];
+      }
+
+      const prompt = buildSentenceAnalysisPrompt(config.aiPromptExtension, data, Boolean(config.useFullContext), config.responseLanguage, config.customResponseLanguage);
       const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelId}:generateContent?key=${config.apiKey}`;
 
       const response = await fetch(apiUrl, {
@@ -126,6 +268,8 @@ function handleSentenceAnalysisRequest(data, sendResponse) {
         return;
       }
 
+      trackDynamicGeminiFields(parsed.value);
+
       sendResponse({ data: parsed.value });
     } catch (error) {
       sendResponse({ error: `Network or parsing error: ${error.message}` });
@@ -133,8 +277,56 @@ function handleSentenceAnalysisRequest(data, sendResponse) {
   });
 }
 
+function handleQuickGeminiFallback(data, sendResponse) {
+  chrome.storage.local.get(['apiKey', 'modelId', 'responseLanguage', 'customResponseLanguage'], async (config) => {
+    try {
+      if (!config.apiKey || !config.modelId) {
+        sendResponse({ error: 'Gemini API key is not configured.' });
+        return;
+      }
+
+      const word = data.word || '';
+      const sentence = data.sentence || '';
+      const langInstr = getLanguageInstruction(config.responseLanguage, config.customResponseLanguage);
+      const prompt = `Provide a concise 1-sentence dictionary definition, Part of Speech, and Hanja (if applicable) for the Korean word "${word}" used in the sentence: "${sentence}".${langInstr ? ' ' + langInstr.trim() : ''}\nReturn JSON strictly matching this schema: {"translation": "concise definition", "pos": "Noun/Verb/Adjective/etc.", "hanja": "〔韓國語〕 or empty"}`;
+
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelId}:generateContent?key=${config.apiKey}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: 'application/json'
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        sendResponse({ error: `Quick LLM API error ${response.status}: ${response.statusText}`, details: errorBody });
+        return;
+      }
+
+      const jsonResponse = await response.json();
+      const text = jsonResponse?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim();
+      const parsed = parseJsonResponse(text);
+
+      if (!parsed.ok) {
+        sendResponse({ error: parsed.error, rawResponse: text });
+        return;
+      }
+
+      sendResponse({ data: parsed.value });
+    } catch (err) {
+      sendResponse({ error: `Quick Fallback error: ${err.message}` });
+    }
+  });
+}
+
 function handleAnkiCardRequest(data, sendResponse) {
-  chrome.storage.local.get(['ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'ankiUpdateLastCard', 'lastCreatedAnkiNoteId'], async (config) => {
+  chrome.storage.local.get(['ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping'], async (config) => {
     try {
       if (!config.ankiConnectUrl || !config.ankiDeckName || !config.ankiNoteType) {
         sendResponse({ error: 'AnkiConnect settings are incomplete. Open extension settings first.' });
@@ -142,20 +334,6 @@ function handleAnkiCardRequest(data, sendResponse) {
       }
 
       const payload = buildAnkiPayload(config, data);
-      const updateLastCard = Boolean(config.ankiUpdateLastCard);
-
-      if (updateLastCard && config.lastCreatedAnkiNoteId) {
-        await callAnkiConnect(config.ankiConnectUrl, 'updateNoteFields', {
-          note: {
-            id: Number(config.lastCreatedAnkiNoteId),
-            fields: payload.fields
-          }
-        });
-
-        sendResponse({ data: { updated: true, noteId: config.lastCreatedAnkiNoteId } });
-        return;
-      }
-
       const result = await callAnkiConnect(config.ankiConnectUrl, 'addNote', {
         note: {
           deckName: config.ankiDeckName,
@@ -176,23 +354,78 @@ function handleAnkiCardRequest(data, sendResponse) {
   });
 }
 
-function buildSentenceAnalysisPrompt(userPrompt, data) {
+function getLanguageInstruction(responseLanguage, customResponseLanguage) {
+  if (!responseLanguage || responseLanguage.toLowerCase() === 'english') {
+    return '';
+  }
+  const langName = responseLanguage === 'Custom' ? (customResponseLanguage || 'target language') : responseLanguage;
+  return `Important: Provide all definitions, translations, and explanations in ${langName}.`;
+}
+
+function buildSentenceAnalysisPrompt(userExtension, data, useFullContext = false, responseLanguage = 'English', customResponseLanguage = '') {
   const context = {
     word: data.word || '',
     sentence: data.sentence || '',
     prevSentence: data.prevSentence || '',
-    nextSentence: data.nextSentence || '',
-    dictionaryCandidate: data.dictionaryEntry || null
+    nextSentence: data.nextSentence || ''
   };
 
-  const promptParts = [
-    DEFAULT_PROMPT,
-    userPrompt ? replacePromptPlaceholders(userPrompt, context) : '',
-    'Context JSON:',
-    JSON.stringify(context, null, 2)
-  ];
+  let promptText = replacePromptPlaceholders(DEFAULT_PROMPT, context);
 
-  return promptParts.filter(Boolean).join('\n\n');
+  if (data.tabContext && data.tabContext.text) {
+    const limit = useFullContext ? 15000 : 3000;
+    promptText += `\n\nActive Tab/Subtitles Context (${data.tabContext.name || 'Webpage'}):\n${data.tabContext.text.slice(0, limit)}`;
+  }
+
+  const langInstr = getLanguageInstruction(responseLanguage, customResponseLanguage);
+  if (langInstr) {
+    promptText += `\n\n${langInstr}`;
+  }
+
+  if (userExtension && userExtension.trim()) {
+    promptText += `\n\nAdditional User Style & Constraints:\n${userExtension.trim()}`;
+  }
+
+  return promptText;
+}
+
+function trackDynamicGeminiFields(responseObj) {
+  if (!responseObj || typeof responseObj !== 'object') return;
+  
+  const targetObj = unpackAnalysis(responseObj);
+
+  chrome.storage.local.get(['trackedGeminiFields', 'totalGeminiLookups', 'aiPromptExtension'], (res) => {
+    let fieldsMap = res.trackedGeminiFields || {};
+    let totalLookups = (res.totalGeminiLookups || 0) + 1;
+    const promptText = res.aiPromptExtension || '';
+
+    const reservedKeys = new Set([
+      'words_analysis', 'words', 'analysis', 'conjugation', 'translation', 'grammar',
+      'notes', 'hanja', 'pos', 'word', 'base', 'sentence', 'prevSentence', 'nextSentence',
+      'candidate', 'definition'
+    ]);
+
+    const allKeys = new Set([...Object.keys(responseObj), ...Object.keys(targetObj)]);
+
+    allKeys.forEach((key) => {
+      if (!reservedKeys.has(key) && key.length >= 2) {
+        fieldsMap[key] = totalLookups;
+      }
+    });
+
+    Object.keys(fieldsMap).forEach((key) => {
+      const isInPrompt = promptText.includes(key);
+      const isStale = (totalLookups - fieldsMap[key] > 5);
+      if (!isInPrompt && isStale) {
+        delete fieldsMap[key];
+      }
+    });
+
+    chrome.storage.local.set({
+      trackedGeminiFields: fieldsMap,
+      totalGeminiLookups: totalLookups
+    });
+  });
 }
 
 function replacePromptPlaceholders(prompt, context) {
@@ -245,26 +478,62 @@ function buildAnkiPayload(config, data) {
   };
 }
 
+function unpackAnalysis(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  let target = raw;
+  if (Array.isArray(target.words_analysis) && target.words_analysis.length > 0) {
+    target = target.words_analysis[0];
+  } else if (Array.isArray(target.analysis) && target.analysis.length > 0) {
+    target = target.analysis[0];
+  } else if (target.analysis && typeof target.analysis === 'object') {
+    target = target.analysis;
+  }
+  return target || {};
+}
+
 function buildTemplateContext(data) {
   const dictionaryEntry = data.dictionaryEntry || {};
-  const analysis = data.analysis || {};
+  const rawAnalysis = data.analysis || {};
+  const rawQuick = data.quickFallback || {};
+  const fullAnalysis = unpackAnalysis(rawAnalysis);
+  const quickAnalysis = unpackAnalysis(rawQuick);
   const definitions = Array.isArray(dictionaryEntry.definitions) ? dictionaryEntry.definitions : [];
 
-  return {
+  const geminiTranslation = fullAnalysis.translation || fullAnalysis.definition || (Array.isArray(fullAnalysis.definitions) ? fullAnalysis.definitions.join('; ') : '') || quickAnalysis.translation || quickAnalysis.definition || (Array.isArray(quickAnalysis.definitions) ? quickAnalysis.definitions.join('; ') : '');
+  const geminiGrammar = fullAnalysis.grammar || fullAnalysis.grammar_notes || (fullAnalysis.conjugation && typeof fullAnalysis.conjugation === 'object' ? fullAnalysis.conjugation.explanation : '') || quickAnalysis.grammar || quickAnalysis.grammar_notes || '';
+  const geminiHanja = (dictionaryEntry && dictionaryEntry.hanja) || fullAnalysis.hanja || quickAnalysis.hanja || '';
+
+  const primaryDef = data.selectedDefinition || (definitions.length > 0 ? definitions.join('; ') : '') || geminiTranslation;
+  const primaryHanja = (dictionaryEntry && dictionaryEntry.hanja) || geminiHanja;
+
+  const activeAnalysisObj = Object.keys(fullAnalysis).length > 0 ? fullAnalysis : quickAnalysis;
+
+  const ctx = {
     word: data.word || '',
-    base: dictionaryEntry.base || analysis.base || data.word || '',
-    pos: dictionaryEntry.pos || analysis.pos || '',
-    definition: definitions.join('; ') || analysis.translation || analysis.definition || '',
-    translation: analysis.translation || analysis.definition || '',
-    grammar: analysis.grammar || analysis.grammar_notes || dictionaryEntry.grammar_notes || '',
-    hanja: analysis.hanja || dictionaryEntry.hanja || '',
-    notes: analysis.notes || dictionaryEntry.grammar_notes || '',
+    base: dictionaryEntry.base || fullAnalysis.base || quickAnalysis.base || data.word || '',
+    pos: dictionaryEntry.pos || fullAnalysis.pos || quickAnalysis.pos || '',
+    definition: primaryDef,
+    translation: geminiTranslation || primaryDef,
+    grammar: geminiGrammar || activeAnalysisObj.notes || dictionaryEntry.grammar_notes || '',
+    hanja: primaryHanja,
+    notes: activeAnalysisObj.notes || dictionaryEntry.grammar_notes || '',
     sentence: data.sentence || '',
     prevSentence: data.prevSentence || '',
     nextSentence: data.nextSentence || '',
     candidate: data.candidate || '',
-    analysisJson: analysis ? JSON.stringify(analysis, null, 2) : ''
+    analysisJson: rawAnalysis && Object.keys(rawAnalysis).length > 0 ? JSON.stringify(rawAnalysis, null, 2) : (rawQuick && Object.keys(rawQuick).length > 0 ? JSON.stringify(rawQuick, null, 2) : '')
   };
+
+  if (activeAnalysisObj && typeof activeAnalysisObj === 'object') {
+    Object.keys(activeAnalysisObj).forEach((key) => {
+      if (!(key in ctx)) {
+        const val = activeAnalysisObj[key];
+        ctx[key] = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
+      }
+    });
+  }
+
+  return ctx;
 }
 
 function renderDefinitionText(context) {
@@ -273,20 +542,12 @@ function renderDefinitionText(context) {
 }
 
 function renderTemplate(template, context) {
-  return template
-    .replace(/\{\{word\}\}/gi, context.word)
-    .replace(/\{\{base\}\}/gi, context.base)
-    .replace(/\{\{pos\}\}/gi, context.pos)
-    .replace(/\{\{definition\}\}/gi, context.definition)
-    .replace(/\{\{translation\}\}/gi, context.translation)
-    .replace(/\{\{grammar\}\}/gi, context.grammar)
-    .replace(/\{\{hanja\}\}/gi, context.hanja)
-    .replace(/\{\{notes\}\}/gi, context.notes)
-    .replace(/\{\{sentence\}\}/gi, context.sentence)
-    .replace(/\{\{prevSentence\}\}/gi, context.prevSentence)
-    .replace(/\{\{nextSentence\}\}/gi, context.nextSentence)
-    .replace(/\{\{candidate\}\}/gi, context.candidate)
-    .replace(/\{\{analysisJson\}\}/gi, context.analysisJson);
+  let result = String(template || '');
+  Object.keys(context).forEach((key) => {
+    const regex = new RegExp(`\\{\\{${key}\\}\\}`, 'gi');
+    result = result.replace(regex, context[key] !== undefined && context[key] !== null ? String(context[key]) : '');
+  });
+  return result.replace(/\{\{[^}]+\}\}/g, '');
 }
 
 async function callAnkiConnect(baseUrl, action, params) {
@@ -306,4 +567,56 @@ async function callAnkiConnect(baseUrl, action, params) {
   }
 
   return result.result;
+}
+
+function handleContextSummarization(rawText, sendResponse) {
+  chrome.storage.local.get(['apiKey', 'modelId', 'useFullContext', 'enableCheaperSummaryModel', 'cheaperSummaryModelId'], async (config) => {
+    try {
+      if (!config.apiKey) {
+        sendResponse({ error: 'Gemini API key is not configured.' });
+        return;
+      }
+
+      const activeModelId = (config.enableCheaperSummaryModel && config.cheaperSummaryModelId)
+        ? config.cheaperSummaryModelId.trim()
+        : (config.modelId || DEFAULT_MODEL_ID);
+
+      let textToSummarize = rawText || '';
+      if (!config.useFullContext && textToSummarize.length > 3000) {
+        const head = textToSummarize.slice(0, 2000);
+        const tail = textToSummarize.slice(-1000);
+        textToSummarize = `${head}\n\n[... middle section abbreviated for token efficiency ...]\n\n${tail}`;
+      } else if (textToSummarize.length > 8000) {
+        textToSummarize = textToSummarize.slice(0, 8000);
+      }
+
+      const prompt = `Summarize the following text from a webpage/subtitle track into a clear, concise background summary (key entities, main topic, setting, and plot/overview) to serve as linguistic context for analyzing Korean sentences in this document. Keep the summary focused and under 400 words.\n\nText:\n${textToSummarize}`;
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${activeModelId}:generateContent?key=${config.apiKey}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }]
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        sendResponse({ error: `Summarization API error (${activeModelId}): ${response.statusText}`, details: errText });
+        return;
+      }
+
+      const json = await response.json();
+      const summaryText = json?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
+      sendResponse({
+        summary: summaryText || textToSummarize.slice(0, 1000),
+        rawCharCount: (rawText || '').length,
+        charCount: textToSummarize.length,
+        useFullContext: Boolean(config.useFullContext)
+      });
+    } catch (err) {
+      sendResponse({ error: `Summarization failed: ${err.message}` });
+    }
+  });
 }

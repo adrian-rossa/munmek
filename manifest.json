@@ -3,14 +3,14 @@
   "name": "Munmek - Korean Context Lookup",
   "version": "1.2.0",
   "description": "Korean hover lookup with local dictionary ranking, optional Gemini explanations, and AnkiConnect exports.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "offscreen"],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"]
+      "js": ["korean_jamo.js", "korean_lemmatizer.js", "korean_pipeline.js", "dictionary_db.js", "content.js"]
     }
   ],
   "action": {
@@ -34,7 +34,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["korean_words.json"],
+      "resources": ["korean_words.json", "offscreen.html", "offscreen.js", "lib/garu/*", "lib/onnx/*", "lib/models/*"],
       "matches": ["<all_urls>"]
     }
   ]

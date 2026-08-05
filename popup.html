@@ -2,23 +2,85 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Munmek Lookup</title>
+  <title>Munmek Context & Settings</title>
   <style>
-    body { margin: 0; min-width: 300px; font-family: Georgia, 'Times New Roman', serif; background: linear-gradient(180deg, #f1ede4, #faf8f3); color: #1e1b16; }
-    .panel { padding: 18px; }
-    h1 { margin: 0 0 10px; font-size: 1.35rem; }
-    p { margin: 0 0 12px; line-height: 1.5; color: #5c5548; }
-    button { border: 0; border-radius: 999px; padding: 10px 14px; font-weight: 700; background: #2f5d62; color: white; cursor: pointer; }
-    button:hover { filter: brightness(1.05); }
-    .note { margin-top: 12px; font-size: 0.85rem; color: #6c6458; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #faf8f3;
+      color: #1e1b16;
+    }
+    .panel { padding: 16px; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #eadfce;
+      padding-bottom: 8px;
+    }
+    h1 { margin: 0; font-size: 1.25rem; color: #2f5d62; font-family: Georgia, serif; }
+    .section-title { font-size: 0.85rem; font-weight: 700; color: #6c6458; margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .status-card {
+      background: #fff;
+      border: 1px solid #eadfce;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.88rem;
+      color: #4f463a;
+      margin-bottom: 12px;
+    }
+    .btn-group { display: flex; flex-direction: column; gap: 8px; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      background: #2f5d62;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    button:hover { filter: brightness(1.08); }
+    button.secondary { background: #e4f0ee; color: #17383b; border: 1px solid #b8d8d4; }
+    button.danger { background: #8b261e; color: #fff; }
+    input[type="file"] { display: none; }
+    .hint { font-size: 0.78rem; color: #7a7265; margin-top: 8px; line-height: 1.4; }
   </style>
 </head>
 <body>
   <div class="panel">
-    <h1>Munmek</h1>
-    <p>Hover Korean text to see the local dictionary lookup and the on-demand Gemini and Anki actions inside the in-page popup.</p>
-    <button id="open-settings">Open Settings</button>
-    <div class="note">The main interaction now lives in the hover tooltip, not this browser action popup.</div>
+    <div class="header">
+      <h1>Munmek Context</h1>
+      <button id="open-settings" class="secondary" style="padding: 4px 10px; font-size: 0.78rem;">⚙ Settings</button>
+    </div>
+
+    <div class="section-title">Active Tab AI Context</div>
+    <div id="contextStatus" class="status-card">Checking active tab context...</div>
+
+    <div class="btn-group">
+      <button id="extractPageBtn">
+        📄 Extract Page / Subtitles Context
+      </button>
+
+      <input type="file" id="contextFileInput" accept=".txt,.srt">
+      <button id="uploadFileBtn" class="secondary">
+        📁 Upload Context File (.txt, .srt)
+      </button>
+
+      <button id="clearContextBtn" class="danger" style="display:none;">
+        🗑 Clear Tab Context
+      </button>
+    </div>
+
+    <div class="hint">
+      Context is attached to Gemini requests on the active tab to provide deep context-aware translations and grammar notes.
+    </div>
   </div>
   <script src="popup.js"></script>
 </body>
