@@ -3,7 +3,7 @@
 **Munmek** is a Chromium browser extension for fast, optionally context-aware Korean word lookups. It combines a local offline termbank engine (supporting Yomichan / KRDICT imports), a hybrid morphological analyzer, neural KoELECTRA candidate reranking, optional Google Gemini explanations for context-aware definitions and explanations, ASBPlayer subtitle support, and interactive AnkiConnect flashcard exports.
 This extension aims to solve the ambiguity that makes Korean so difficult for beginners.
 
-In its current state this extension serves as a **proof of concept**. I will rework it from scratch for better maintainability if demand is there and it proves useful.
+In its current vibe coded state this extension serves as a **proof of concept**. I will rework it from scratch for better maintainability and stability if I feel like demand is there and it proves useful.
 Meanwhile [Kimchi Reader](https://kimchi-reader.app/) or [Migaku](https://migaku.com/) are more polished and actively maintained paid alternatives with a similar featureset.
 Credits for the amazing [blog post](https://kimchi-reader.app/blog/int8-cpu-korean-disambiguation) regarding the KoELECTRA INT8 Reranker go to Kimchi Readers developer @Alanoor.
 ---
