@@ -1,4 +1,4 @@
-import initGaruWasm, { GaruWasm } from './lib/garu/garu_wasm.js';
+import initGaruWasm, { GaruWasm } from '../../lib/garu/garu_wasm.js';
 
 let garuInstance = null;
 let isInitializing = false;

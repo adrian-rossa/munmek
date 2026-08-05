@@ -18,21 +18,89 @@
   let currentModifierKey = 'Shift';
   let currentSelectedDictionaryId = 'all';
   let currentTooltipFontSize = 15;
+  const subtitleHistoryBuffer = [];
+  let _asbObserver = null;
+  let _asbContainerEl = null;
+  let _asbScanInterval = null;
+
+  function recordSubtitleLine(text) {
+    const cleaned = normalizeText(text);
+    if (!cleaned || cleaned.length < 2 || cleaned.length > 200) return;
+    if (subtitleHistoryBuffer.length === 0 || subtitleHistoryBuffer[subtitleHistoryBuffer.length - 1] !== cleaned) {
+      subtitleHistoryBuffer.push(cleaned);
+      if (subtitleHistoryBuffer.length > 500) subtitleHistoryBuffer.shift();
+    }
+  }
+
+  let _asbScanAttempts = 0;
+  const MAX_ASB_SCAN_ATTEMPTS = 30;
+
+  function findAndObserveAsbPlayer() {
+    // Already observing a live container
+    if (_asbContainerEl && document.contains(_asbContainerEl)) return;
+
+    const container = document.querySelector('[class*="asbplayer-subtitles-container"]');
+    if (!container) {
+      _asbScanAttempts++;
+      if (_asbScanAttempts >= MAX_ASB_SCAN_ATTEMPTS && _asbScanInterval) {
+        clearInterval(_asbScanInterval);
+        _asbScanInterval = null;
+      }
+      return;
+    }
+
+    _asbScanAttempts = 0;
+    // Clean up previous observer
+    if (_asbObserver) { _asbObserver.disconnect(); _asbObserver = null; }
+
+    _asbContainerEl = container;
+
+    let debounceTimer = null;
+    _asbObserver = new MutationObserver(() => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        // Record only innermost .asbplayer-subtitle cue text (not parent containers)
+        const cues = container.querySelectorAll('[class*="asbplayer-subtitle"]:not([class*="asbplayer-subtitles-container"])');
+        cues.forEach((cue) => {
+          // Skip containers that have subtitle children — only record leaf cues
+          if (cue.querySelector('[class*="asbplayer-subtitle"]')) return;
+          recordSubtitleLine(cue.textContent);
+        });
+      }, 80);
+    });
+
+    _asbObserver.observe(container, { childList: true, subtree: true, characterData: true });
+
+    // Stop scanning once we've found the container
+    if (_asbScanInterval) { clearInterval(_asbScanInterval); _asbScanInterval = null; }
+  }
+
+  let extensionEnabled = true;
 
   function init() {
     attachHoverListeners(document);
     observeShadowRoots();
 
+    // Lazily discover ASBPlayer container (it's injected dynamically when playback starts)
+    findAndObserveAsbPlayer();
+
+    _asbScanInterval = setInterval(findAndObserveAsbPlayer, 3000);
+
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize'], (res) => {
+      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize', 'extensionEnabled'], (res) => {
         if (res.modifierKey !== undefined) currentModifierKey = res.modifierKey;
         if (res.selectedDictionaryId) currentSelectedDictionaryId = res.selectedDictionaryId;
         if (res.tooltipFontSize) currentTooltipFontSize = Number(res.tooltipFontSize) || 15;
+        if (res.extensionEnabled !== undefined) extensionEnabled = Boolean(res.extensionEnabled);
       });
 
       if (chrome.storage.onChanged) {
         chrome.storage.onChanged.addListener((changes, areaName) => {
           if (areaName === 'local') {
+            if (changes.extensionEnabled) {
+              extensionEnabled = Boolean(changes.extensionEnabled.newValue);
+              if (!extensionEnabled) scheduleHideTooltip();
+            }
             if (changes.modifierKey) currentModifierKey = changes.modifierKey.newValue || 'Shift';
             if (changes.selectedDictionaryId) currentSelectedDictionaryId = changes.selectedDictionaryId.newValue || 'all';
             if (changes.tooltipFontSize) {
@@ -57,7 +125,7 @@
             word: currentHoverState.word,
             sentence: currentHoverState.sentence,
             prevSentence: currentHoverState.prevSentence,
-            nextSentence: currentHoverState.nextSentence
+            prevSentence2: currentHoverState.prevSentence2
           },
           lastTooltipPosition.x,
           lastTooltipPosition.y
@@ -78,12 +146,14 @@
   }
 
   function handleGlobalKeyDown(event) {
+    if (!extensionEnabled) return;
     if (isKeyMatch(event.key) && lastMouseEvent && !isMouseOverTooltip) {
       processMouseMove(lastMouseEvent);
     }
   }
 
   function handleGlobalKeyUp(event) {
+    if (!extensionEnabled) return;
     if (isKeyMatch(event.key) && !isMouseOverTooltip) {
       scheduleHideTooltip();
     }
@@ -103,18 +173,39 @@
     root._munmekHoverAttached = true;
   }
 
+  let _shadowScanDebounceTimer = null;
+
   function observeShadowRoots() {
-    scanForShadowRoots();
-    const observer = new MutationObserver(scanForShadowRoots);
+    scanForShadowRoots(document.body);
+    const observer = new MutationObserver((mutations) => {
+      let hasAddedElements = false;
+      for (let i = 0; i < mutations.length; i++) {
+        if (mutations[i].addedNodes && mutations[i].addedNodes.length > 0) {
+          hasAddedElements = true;
+          break;
+        }
+      }
+      if (hasAddedElements) {
+        clearTimeout(_shadowScanDebounceTimer);
+        _shadowScanDebounceTimer = setTimeout(() => {
+          scanForShadowRoots(document.body);
+        }, 1000);
+      }
+    });
     if (document.body) {
       observer.observe(document.body, { childList: true, subtree: true });
     }
   }
 
-  function scanForShadowRoots() {
-    document.querySelectorAll('*').forEach((el) => {
-      if (el.shadowRoot) attachHoverListeners(el.shadowRoot);
-    });
+  function scanForShadowRoots(root) {
+    if (!root) return;
+    if (root.shadowRoot) attachHoverListeners(root.shadowRoot);
+    if (root.querySelectorAll) {
+      const elements = root.querySelectorAll('*');
+      for (let i = 0; i < elements.length; i++) {
+        if (elements[i].shadowRoot) attachHoverListeners(elements[i].shadowRoot);
+      }
+    }
   }
 
   let mouseMoveScheduled = false;
@@ -124,7 +215,7 @@
     lastMouseEvent = event;
     if (isMouseOverTooltip) return;
 
-    if (!isModifierPressed(event)) {
+    if (!extensionEnabled || !isModifierPressed(event)) {
       scheduleHideTooltip();
       return;
     }
@@ -139,6 +230,10 @@
   }
 
   function processMouseMove(event) {
+    if (!extensionEnabled) {
+      scheduleHideTooltip();
+      return;
+    }
     if (isMouseOverTooltip) return;
 
     const range = getRangeFromPoint(event.view?.document || document, event.clientX, event.clientY);
@@ -209,29 +304,49 @@
     const word = textContent.slice(start, end).trim();
     if (!word) return null;
 
-    let containerEl = node.parentElement;
-    let asbplayerContainer = null;
-    const blockTags = new Set(['P', 'DIV', 'LI', 'SECTION', 'ARTICLE', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'MAIN']);
+    // Detect ASBPlayer subtitle context via closest() — simple and reliable
+    const asbplayerContainer = node.parentElement
+      ? node.parentElement.closest('[class*="asbplayer-subtitles"]')
+      : null;
+    const isSubtitleContext = Boolean(asbplayerContainer);
 
-    while (containerEl && containerEl !== document.body) {
-      if (containerEl.classList && Array.from(containerEl.classList).some((cls) => cls.includes('asbplayer-subtitles') || cls.includes('asbplayer-subtitle'))) {
-        asbplayerContainer = containerEl;
-        break;
-      }
-      if (blockTags.has(containerEl.tagName)) break;
-      containerEl = containerEl.parentElement;
+    // For subtitle context, get text from the innermost subtitle cue element.
+    // For normal text, use the immediate parent element's text.
+    let paragraphText;
+    if (asbplayerContainer) {
+      // Find the innermost .asbplayer-subtitle(s) that contains our text
+      const cueEl = node.parentElement.closest('[class*="asbplayer-subtitle"]:not([class*="asbplayer-subtitles-container"])');
+      paragraphText = normalizeText((cueEl || asbplayerContainer).textContent || textContent);
+      recordSubtitleLine(paragraphText);
+    } else {
+      paragraphText = normalizeText(node.parentElement?.textContent || textContent);
     }
 
-    const paragraphText = normalizeText((asbplayerContainer || containerEl || node.parentElement)?.textContent || textContent);
     let sentenceWindow = getSentenceWindow(paragraphText, word);
 
-    if (window._munmekTabContextText) {
+    // For subtitles, override currentSentence to be the full cue line
+    if (isSubtitleContext && paragraphText) {
+      sentenceWindow.currentSentence = paragraphText;
+    }
+
+    // Look up prev sentences from subtitle history buffer (two lines back for richer context)
+    if (subtitleHistoryBuffer.length > 0 && isSubtitleContext) {
+      const cur = sentenceWindow.currentSentence || paragraphText;
+      const idx = subtitleHistoryBuffer.lastIndexOf(cur);
+      if (idx !== -1) {
+        sentenceWindow.prevSentence = idx > 0 ? subtitleHistoryBuffer[idx - 1] : '';
+        sentenceWindow.prevSentence2 = idx > 1 ? subtitleHistoryBuffer[idx - 2] : '';
+      }
+    }
+
+    // Merge with tab-level context (e.g. article text around the word)
+    if (window._munmekTabContextText && !isSubtitleContext) {
       const tabWindow = getSentenceWindow(window._munmekTabContextText, word);
       if (tabWindow && tabWindow.currentSentence && tabWindow.currentSentence !== word) {
         sentenceWindow = {
           currentSentence: sentenceWindow.currentSentence || tabWindow.currentSentence,
           prevSentence: tabWindow.prevSentence || sentenceWindow.prevSentence,
-          nextSentence: tabWindow.nextSentence || sentenceWindow.nextSentence
+          prevSentence2: sentenceWindow.prevSentence2 || ''
         };
       }
     }
@@ -240,18 +355,18 @@
       word,
       sentence: sentenceWindow.currentSentence,
       prevSentence: sentenceWindow.prevSentence,
-      nextSentence: sentenceWindow.nextSentence,
+      prevSentence2: sentenceWindow.prevSentence2 || '',
       paragraphText,
-      isAsbplayerSubtitle: Boolean(asbplayerContainer)
+      isAsbplayerSubtitle: isSubtitleContext
     };
   }
 
   function getSentenceWindow(text, sentenceFragment) {
     const normalized = normalizeText(text);
-    if (!normalized) return { currentSentence: sentenceFragment, prevSentence: '', nextSentence: '' };
+    if (!normalized) return { currentSentence: sentenceFragment, prevSentence: '', prevSentence2: '' };
 
     const sentences = normalized.split(/(?<=[.!?。？！])\s+|\n+/).map((part) => part.trim()).filter(Boolean);
-    if (sentences.length === 0) return { currentSentence: normalized, prevSentence: '', nextSentence: '' };
+    if (sentences.length === 0) return { currentSentence: normalized, prevSentence: '', prevSentence2: '' };
 
     const fragment = normalizeText(sentenceFragment);
     let index = sentences.findIndex((candidate) => candidate.includes(fragment) || fragment.includes(candidate));
@@ -263,7 +378,7 @@
     return {
       currentSentence: sentences[index] || normalized,
       prevSentence: index > 0 ? sentences[index - 1] : '',
-      nextSentence: index >= 0 && index < sentences.length - 1 ? sentences[index + 1] : ''
+      prevSentence2: index > 1 ? sentences[index - 2] : ''
     };
   }
 
@@ -277,7 +392,8 @@
       sentence,
       sentenceKey: normalizeText(sentence || word),
       prevSentence: normalizeText(context.prevSentence),
-      nextSentence: normalizeText(context.nextSentence),
+      prevSentence2: normalizeText(context.prevSentence2),
+      isAsbplayerSubtitle: Boolean(context.isAsbplayerSubtitle),
       dictionaryEntry: null,
       dictionaryMatch: '',
       candidateList,
@@ -285,6 +401,8 @@
       x,
       y,
       tooltipFontSize: currentTooltipFontSize,
+      quickFallback: null,
+      userSelectedDef: false,
       feedback: '',
       feedbackType: 'info'
     };
@@ -321,6 +439,7 @@
               currentHoverState.dictionaryEntry = sortedHits[0];
               currentHoverState.dictionaryMatch = candidate.text;
               currentHoverState.selectedGroupIndex = 0;
+              currentHoverState.quickFallback = null;
               currentHoverState.lookupReason = `IndexedDB Surface Match (${sortedHits[0].dictTitle || 'Local'})`;
               rerenderCurrentTooltip();
             }
@@ -343,6 +462,7 @@
               currentHoverState.dictionaryEntry = sortedHits[0];
               currentHoverState.dictionaryMatch = candidate.text;
               currentHoverState.selectedGroupIndex = 0;
+              currentHoverState.quickFallback = null;
               currentHoverState.lookupReason = `IndexedDB Base Match (${sortedHits[0].dictTitle || 'Local'})`;
               rerenderCurrentTooltip();
             }
@@ -393,11 +513,12 @@
   }
 
   function handleTooltipClick(event) {
-    const target = event.target;
-    if (!(target instanceof Element) || !currentHoverState) return;
+    const rawTarget = event.target;
+    if (!(rawTarget instanceof Element) || !currentHoverState) return;
 
-    const selectedCandidate = target.getAttribute('data-candidate');
-    if (selectedCandidate) {
+    const candidateEl = rawTarget.closest('[data-candidate]');
+    if (candidateEl) {
+      const selectedCandidate = candidateEl.getAttribute('data-candidate');
       currentHoverState.dictionaryMatch = selectedCandidate;
       currentHoverState.word = selectedCandidate;
       currentHoverState.selectedDefinitionIndex = 0;
@@ -441,11 +562,12 @@
       return;
     }
 
-    const action = target.getAttribute('data-action');
-    if (!action) return;
+    const actionEl = rawTarget.closest('[data-action]');
+    if (!actionEl) return;
+    const action = actionEl.getAttribute('data-action');
 
     if (action === 'select-dict-group-tab') {
-      const idx = parseInt(target.getAttribute('data-group-index'), 10);
+      const idx = parseInt(actionEl.getAttribute('data-group-index'), 10);
       currentHoverState.selectedGroupIndex = idx;
       const dictGroups = window.MunmekUI ? window.MunmekUI.groupEntriesByDictTitle(currentHoverState.dictionaryEntries || []) : [];
       if (dictGroups[idx] && dictGroups[idx].items[0]) {
@@ -456,11 +578,12 @@
     }
 
     if (action === 'select-def-tab') {
-      const idxStr = target.getAttribute('data-def-index');
-      const itemIdxStr = target.getAttribute('data-item-index') || '0';
+      const idxStr = actionEl.getAttribute('data-def-index');
+      const itemIdxStr = actionEl.getAttribute('data-item-index') || '0';
       if (idxStr !== null) {
         const itemIdx = Number(itemIdxStr);
         const defIdx = Number(idxStr);
+        currentHoverState.userSelectedDef = true;
         currentHoverState[`selectedDefIndex_${itemIdx}`] = defIdx;
 
         const dictGroups = window.MunmekUI ? window.MunmekUI.groupEntriesByDictTitle(currentHoverState.dictionaryEntries || []) : [];
@@ -503,8 +626,8 @@
     }
 
     if (action === 'anki-def') {
-      const defIndexStr = target.getAttribute('data-def-index');
-      const itemIdxStr = target.getAttribute('data-item-index') || '0';
+      const defIndexStr = actionEl.getAttribute('data-def-index');
+      const itemIdxStr = actionEl.getAttribute('data-item-index') || '0';
       const itemIdx = Number(itemIdxStr);
       const defIndex = defIndexStr !== null ? Number(defIndexStr) : 0;
 
@@ -568,6 +691,14 @@
 
     pendingAnalysisRequests.set(state.sentenceKey, true);
 
+    console.log('[Munmek SubtitleContextSent]', {
+      word: state.word,
+      sentence: state.sentence,
+      prevSentence: state.prevSentence || '(none)',
+      prevSentence2: state.prevSentence2 || '(none)',
+      isAsbplayerSubtitle: Boolean(state.isAsbplayerSubtitle)
+    });
+
     chrome.runtime.sendMessage(
       {
         type: 'analyzeSentence',
@@ -575,7 +706,7 @@
           word: state.word,
           sentence: state.sentence,
           prevSentence: state.prevSentence,
-          nextSentence: state.nextSentence,
+          prevSentence2: state.prevSentence2,
           dictionaryEntry: state.dictionaryEntry,
           candidate: state.dictionaryMatch
         }
@@ -584,7 +715,11 @@
         pendingAnalysisRequests.delete(state.sentenceKey);
 
         if (chrome.runtime.lastError || !response || response.error) {
-          currentHoverState.feedback = response?.error || chrome.runtime.lastError?.message || 'Gemini request failed.';
+          let errMsg = response?.error || chrome.runtime.lastError?.message || 'Gemini request failed.';
+          if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+            errMsg = 'Gemini API Rate Limit Reached (HTTP 429). Please wait a few seconds before clicking Ask Gemini again.';
+          }
+          currentHoverState.feedback = errMsg;
           currentHoverState.feedbackType = 'error';
           rerenderCurrentTooltip();
           return;
@@ -620,7 +755,7 @@
           word: state.word,
           sentence: state.sentence,
           prevSentence: state.prevSentence,
-          nextSentence: state.nextSentence,
+          prevSentence2: state.prevSentence2,
           dictionaryEntry: mode === 'llm' ? {} : state.dictionaryEntry,
           candidate: state.dictionaryMatch,
           analysis: cachedAnalysis,

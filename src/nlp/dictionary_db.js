@@ -93,44 +93,61 @@
     cachedDictMap = null;
   }
 
+  function sortHitsByDictOrder(hits, dictOrder) {
+    if (!Array.isArray(dictOrder) || dictOrder.length === 0 || !Array.isArray(hits)) return hits;
+    return hits.sort((a, b) => {
+      const idxA = dictOrder.indexOf(a.dictId);
+      const idxB = dictOrder.indexOf(b.dictId);
+      const rankA = idxA === -1 ? 999 : idxA;
+      const rankB = idxB === -1 ? 999 : idxB;
+      return rankA - rankB;
+    });
+  }
+
   async function insertEntries(entries, dictId = 'default_dict', dictTitle = 'Imported Dictionary') {
     if (!Array.isArray(entries) || entries.length === 0) return 0;
     const db = await openDB();
 
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([STORE_WORDS, STORE_DICTS], 'readwrite');
-      const wordStore = tx.objectStore(STORE_WORDS);
-      const dictStore = tx.objectStore(STORE_DICTS);
+    const BATCH_SIZE = 5000;
+    let totalInserted = 0;
 
-      let insertedCount = 0;
-      for (const item of entries) {
-        const entryToSave = {
-          ...item,
-          dictId: item.dictId || dictId,
-          dictTitle: item.dictTitle || dictTitle
-        };
-        wordStore.put(entryToSave);
-        insertedCount++;
-      }
+    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+      const chunk = entries.slice(i, i + BATCH_SIZE);
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_WORDS, STORE_DICTS], 'readwrite');
+        const wordStore = tx.objectStore(STORE_WORDS);
+        const dictStore = tx.objectStore(STORE_DICTS);
 
-      // Update dict metadata
-      const countReq = wordStore.index('dictId').count(dictId);
-      countReq.onsuccess = () => {
-        const totalForDict = countReq.result || insertedCount;
-        dictStore.put({
-          id: dictId,
-          title: dictTitle,
-          wordCount: totalForDict,
-          updatedAt: Date.now()
-        });
-      };
+        for (const item of chunk) {
+          const entryToSave = {
+            ...item,
+            dictId: item.dictId || dictId,
+            dictTitle: item.dictTitle || dictTitle
+          };
+          wordStore.put(entryToSave);
+          totalInserted++;
+        }
 
-      tx.oncomplete = () => {
-        invalidateDictMapCache();
-        resolve(insertedCount);
-      };
-      tx.onerror = () => reject(tx.error);
-    });
+        if (i + BATCH_SIZE >= entries.length) {
+          const countReq = wordStore.index('dictId').count(dictId);
+          countReq.onsuccess = () => {
+            const totalForDict = countReq.result || totalInserted;
+            dictStore.put({
+              id: dictId,
+              title: dictTitle,
+              wordCount: totalForDict,
+              updatedAt: Date.now()
+            });
+          };
+        }
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    invalidateDictMapCache();
+    return totalInserted;
   }
 
   async function deleteDictionary(dictId) {
@@ -187,17 +204,7 @@
           dictTitle: item.dictTitle || dictMap.get(item.dictId) || 'Imported Dictionary'
         }));
 
-        if (Array.isArray(dictOrder) && dictOrder.length > 0) {
-          hits.sort((a, b) => {
-            const idxA = dictOrder.indexOf(a.dictId);
-            const idxB = dictOrder.indexOf(b.dictId);
-            const rankA = idxA === -1 ? 999 : idxA;
-            const rankB = idxB === -1 ? 999 : idxB;
-            return rankA - rankB;
-          });
-        }
-
-        resolve(hits);
+        resolve(sortHitsByDictOrder(hits, dictOrder));
       };
       req.onerror = () => reject(req.error);
     });
@@ -225,17 +232,7 @@
           dictTitle: item.dictTitle || dictMap.get(item.dictId) || 'Imported Dictionary'
         }));
 
-        if (Array.isArray(dictOrder) && dictOrder.length > 0) {
-          hits.sort((a, b) => {
-            const idxA = dictOrder.indexOf(a.dictId);
-            const idxB = dictOrder.indexOf(b.dictId);
-            const rankA = idxA === -1 ? 999 : idxA;
-            const rankB = idxB === -1 ? 999 : idxB;
-            return rankA - rankB;
-          });
-        }
-
-        resolve(hits);
+        resolve(sortHitsByDictOrder(hits, dictOrder));
       };
       req.onerror = () => reject(req.error);
     });

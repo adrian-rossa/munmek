@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import '../korean_jamo.js';
-import '../korean_lemmatizer.js';
+import '../src/nlp/korean_jamo.js';
+import '../src/nlp/korean_lemmatizer.js';
 
 describe('Korean Jamo Utility', () => {
   it('decomposes Hangul syllables into jamo components', () => {
@@ -41,5 +41,11 @@ describe('Korean Lemmatizer Rule Engine', () => {
     const candidates = globalThis.KoreanLemmatizer.deconjugate('부르고');
     const texts = candidates.map(c => c.text);
     expect(texts).toContain('부르다');
+  });
+
+  it('deconjugates ㅡ-drop polite adjective endings (e.g. 배고파요 -> 배고프다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('배고파요');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('배고프다');
   });
 });

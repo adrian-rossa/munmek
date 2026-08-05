@@ -15,6 +15,8 @@
     tooltip = document.createElement('div');
     tooltip.id = TOOLTIP_ID;
     tooltip.className = 'munmek-tooltip';
+    tooltip.setAttribute('role', 'tooltip');
+    tooltip.setAttribute('aria-label', 'Munmek Korean Context Lookup Tooltip');
 
     if (typeof onMouseEnter === 'function') tooltip.addEventListener('mouseenter', onMouseEnter);
     if (typeof onMouseLeave === 'function') tooltip.addEventListener('mouseleave', onMouseLeave);
@@ -64,7 +66,7 @@
       state.sentence ? `<div class="subtitle">${escapeHtml(truncateText(state.sentence, 180))}</div>` : '',
       renderActions(state, Boolean(analysis)),
       renderAnalysisSection(analysis, state),
-      state.feedback ? `<div class="feedback ${state.feedbackType === 'error' ? 'error' : ''}">${escapeHtml(state.feedback)}</div>` : ''
+      state.feedback ? `<div class="feedback ${state.feedbackType === 'error' ? 'error' : ''}" role="status" aria-live="polite">${escapeHtml(state.feedback)}</div>` : ''
     ].filter(Boolean).join('');
 
     tooltip.innerHTML = html;
@@ -127,28 +129,92 @@
       .trim();
   }
 
+  function isSentencePattern(text) {
+    if (!text || typeof text !== 'string') return false;
+    const t = text.trim();
+    if (/^(Sentence|Grammar|Pattern|文型)\s*:?/i.test(t)) return true;
+    if (/^\d+[이가을를에에서과와도만으로로은는](?:\s|$)/i.test(t)) return true;
+    return false;
+  }
+
+  function stripHtml(value) {
+    return String(value || '').replace(/<[^>]*>/g, '').trim();
+  }
+
   function splitEmbeddedDefinitions(defList, surfaceWord = '') {
     if (!Array.isArray(defList) || defList.length === 0) return [];
-    const result = [];
 
-    defList.forEach((defStr) => {
-      if (!defStr || typeof defStr !== 'string') return;
-      const subDefs = defStr.split(/(?<=\D|^)(?=\b\d{1,2}[\.\)]\s+)/g);
-      subDefs.forEach((sub) => {
-        let cleaned = sub.trim();
-        if (!cleaned) return;
-        cleaned = cleaned.replace(/^[\d]+[\.\)]\s*/, '').trim();
-        const isStemOnly = surfaceWord && (cleaned === `${surfaceWord}-` || cleaned === `${surfaceWord} -` || cleaned === `${surfaceWord}–`);
-        if (!isStemOnly && cleaned && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ\u3040-\u30ff\u4e00-\u9faf]/.test(cleaned)) {
-          if (/^\([^)]*(어|아|어서|아서|으니|으면|은)[^)]*\)$/.test(cleaned)) {
-            cleaned = `Conjugations: ${cleaned}`;
-          }
-          result.push(formatDefinitionText(cleaned));
-        }
+    const allLines = [];
+    defList.forEach((item) => {
+      if (!item || typeof item !== 'string') return;
+      const subParts = item.split(/(?<=\D|^)(?=\b\d{1,2}[\.\)]\s+)/g);
+      subParts.forEach((part) => {
+        part.split(/\r?\n/).forEach((l) => {
+          const t = l.trim();
+          if (t) allLines.push(t);
+        });
       });
     });
 
-    return result.length > 0 ? result : defList.map(formatDefinitionText);
+    const senses = [];
+    let currentSense = null;
+
+    allLines.forEach((line) => {
+      let cleaned = line.trim();
+      if (!cleaned) return;
+
+      const isStemOnly = surfaceWord && (cleaned === `${surfaceWord}-` || cleaned === `${surfaceWord} -` || cleaned === `${surfaceWord}–`);
+      if (isStemOnly || !/[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ\u3040-\u30ff\u4e00-\u9faf]/.test(cleaned)) return;
+
+      const numberedMatch = cleaned.match(/^(\d{1,2})[\.\)]\s*(.*)/s);
+      if (numberedMatch) {
+        if (currentSense) senses.push(currentSense);
+        cleaned = numberedMatch[2].trim();
+        currentSense = { title: cleaned, body: '', pattern: '' };
+        return;
+      }
+
+      if (isSentencePattern(cleaned)) {
+        const patternText = cleaned.replace(/^(Sentence|Grammar|Pattern|文型)\s*:?\s*/i, '').trim();
+        if (patternText && currentSense) {
+          currentSense.pattern = currentSense.pattern ? `${currentSense.pattern}; ${patternText}` : patternText;
+        }
+        return;
+      }
+
+      cleaned = cleaned.replace(/^[\d]+[\.\)]\s*/, '').trim();
+
+      if (/^\([^)]*(어|아|어서|아서|으니|으면|은)[^)]*\)$/.test(cleaned)) {
+        cleaned = `Conjugations: ${cleaned}`;
+      }
+
+      if (!currentSense) {
+        currentSense = { title: cleaned, body: '', pattern: '' };
+      } else if (!currentSense.body) {
+        currentSense.body = cleaned;
+      } else {
+        senses.push(currentSense);
+        currentSense = { title: cleaned, body: '', pattern: '' };
+      }
+    });
+
+    if (currentSense) senses.push(currentSense);
+
+    if (senses.length === 0) return defList.map(formatDefinitionText);
+
+    return senses.map((s) => {
+      const parts = [];
+      if (s.title) {
+        parts.push(`<strong>${escapeHtml(s.title)}</strong>`);
+      }
+      if (s.body) {
+        parts.push(escapeHtml(s.body));
+      }
+      if (s.pattern) {
+        parts.push(`<span class="muted" style="font-style: italic; font-size: 0.9em;">(Pattern: ${escapeHtml(s.pattern)})</span>`);
+      }
+      return parts.join('\n');
+    });
   }
 
   function renderSingleEntryCard(entry, matchLabel, itemIndex = 0, state = null) {
@@ -162,18 +228,24 @@
     const chips = [entry.pos, entry.type, matchLabel].filter(Boolean).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
 
     const isCardMatched = (state && typeof state.geminiMatchedItemIndex === 'number' && state.geminiMatchedItemIndex === itemIndex);
-    const isDefMatched = isCardMatched && (typeof state.geminiMatchedDefIndex === 'number' && state.geminiMatchedDefIndex === validIndex);
+    const matchedDefIdx = isCardMatched ? state.geminiMatchedDefIndex : null;
+    const hasGeminiMatch = typeof matchedDefIdx === 'number';
 
-    const geminiBadgeHtml = isDefMatched
-      ? `<span style="background: #2f5d62; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ Context Matched</span>`
-      : '';
+    let geminiBadgeHtml = '';
+    if (hasGeminiMatch) {
+      if (validIndex === matchedDefIdx) {
+        geminiBadgeHtml = `<span style="background: #2f5d62; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ Context Matched</span>`;
+      } else {
+        geminiBadgeHtml = `<span style="background: #e4f0ee; color: #17383b; border: 1px solid #2f5d62; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ Context Matched (Def ${matchedDefIdx + 1})</span>`;
+      }
+    }
 
     const tabsHtml = definitions.length > 1
       ? `<div class="def-tabs" style="display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; padding-bottom: 4px;">
           ${definitions.map((def, idx) => {
             const isActive = idx === validIndex;
             const isMatchedTab = isCardMatched && (state.geminiMatchedDefIndex === idx);
-            const shortText = truncateText(def, 22);
+            const shortText = truncateText(stripHtml(def), 22);
             return `<button type="button" class="def-tab" data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid ${isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4')}; background: ${isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff')}; color: ${isActive ? '#fff' : '#4f463a'};">Def ${idx + 1}: ${escapeHtml(shortText)}${isMatchedTab ? ' ✨' : ''}</button>`;
           }).join('')}
          </div>`
@@ -191,7 +263,7 @@
           </div>
           ${tabsHtml}
           <div style="font-size: 0.94em; font-weight: 500; color: #1e1b16; background: #faf7f2; border: 1px solid #eadfce; border-left: 4px solid #2f5d62; border-radius: 8px; padding: 10px 12px; line-height: 1.5; white-space: pre-line;">
-            ${escapeHtml(selectedDef)}
+            ${selectedDef}
           </div>
          </div>`
       : '<div class="section empty">No definition text available.</div>';
@@ -350,7 +422,7 @@
             const reservedKeys = new Set([
               'words_analysis', 'words', 'analysis', 'surface', 'word', 'base', 'pos',
               'definitions', 'definition', 'conjugation', 'notes', 'grammar_notes', 'id',
-              'sentence', 'prevSentence', 'nextSentence', 'candidate'
+              'sentence', 'prevSentence', 'prevSentence2', 'candidate'
             ]);
             const customCards = [];
             const seenKeys = new Set();
@@ -484,8 +556,10 @@
     if (bestScore > 0) {
       state.geminiMatchedItemIndex = bestItemIndex;
       state.geminiMatchedDefIndex = bestDefIndex;
-      state[`selectedDefIndex_${bestItemIndex}`] = bestDefIndex;
-      state.selectedDefinitionIndex = bestDefIndex;
+      if (!state.userSelectedDef) {
+        state[`selectedDefIndex_${bestItemIndex}`] = bestDefIndex;
+        state.selectedDefinitionIndex = bestDefIndex;
+      }
     }
   }
 

@@ -359,24 +359,29 @@
     }
   }
 
-  // ㅡ 탈락 (e.g., 써 -> 쓰다, 커 -> 크다, 기뻐 -> 기쁘다, 아파 -> 아쁘다/아프다)
+  // ㅡ 탈락 (e.g., 배고파요 -> 배고프다, 써 -> 쓰다, 커 -> 크다, 기뻐요 -> 기쁘다, 아파요 -> 아프다)
   function deconjugateEuDrop(surface, addCandidate) {
-    if (surface === '써' || surface.startsWith('썼') || surface.startsWith('써서')) {
+    if (surface === '써' || surface.startsWith('썼') || surface.startsWith('써서') || surface.startsWith('써요')) {
       addCandidate('쓰다', 'ㅡ-drop (써 -> 쓰다)', 90);
     }
-    if (surface === '커' || surface.startsWith('컸') || surface.startsWith('커서')) {
+    if (surface === '커' || surface.startsWith('컸') || surface.startsWith('커서') || surface.startsWith('커요')) {
       addCandidate('크다', 'ㅡ-drop (커 -> 크다)', 90);
     }
-    if (surface === '끄어' || surface === '꺼' || surface.startsWith('껐')) {
+    if (surface === '꺼' || surface.startsWith('껐') || surface.startsWith('꺼서') || surface.startsWith('꺼요')) {
       addCandidate('끄다', 'ㅡ-drop (꺼 -> 끄다)', 90);
     }
-    if (surface.endsWith('뻐') || surface.includes('뻐서') || surface.includes('뻤')) {
-      const stem = surface.replace(/뻐.*$/, '쁘');
-      addCandidate(stem + '다', 'ㅡ-drop (-뻐 -> -쁘다)', 85);
+
+    if (surface.includes('고파')) {
+      const prefix = surface.replace(/고파.*$/, '');
+      addCandidate(prefix + '고프다', 'ㅡ-drop (-고파 -> -고프다)', 92);
     }
-    if (surface.endsWith('파') || surface.includes('파서') || surface.includes('팠')) {
-      const stem = surface.replace(/파.*$/, '프');
-      addCandidate(stem + '다', 'ㅡ-drop (-파 -> -프다)', 85);
+
+    const euMatch = surface.match(/([가-힣]*)([파뻐퍼프])([요서도면지라았었ㄴㄹ]*)$/);
+    if (euMatch) {
+      const prefix = euMatch[1] || '';
+      const v = euMatch[2];
+      if (v === '파' || v === '퍼') addCandidate(prefix + '프다', 'ㅡ-drop (-파/-퍼 -> -프다)', 88);
+      if (v === '뻐') addCandidate(prefix + '쁘다', 'ㅡ-drop (-뻐 -> -쁘다)', 88);
     }
   }
 

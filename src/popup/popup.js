@@ -5,10 +5,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   const uploadFileBtn = document.getElementById('uploadFileBtn');
   const contextFileInput = document.getElementById('contextFileInput');
   const clearContextBtn = document.getElementById('clearContextBtn');
+  const extensionToggleCheck = document.getElementById('extensionToggleCheck');
+  const toggleStateLabel = document.getElementById('toggleStateLabel');
 
   let activeTab = null;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   activeTab = tab;
+
+  if (chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['extensionEnabled'], (res) => {
+      const isEnabled = res.extensionEnabled !== undefined ? Boolean(res.extensionEnabled) : true;
+      if (extensionToggleCheck) extensionToggleCheck.checked = isEnabled;
+      if (toggleStateLabel) toggleStateLabel.textContent = isEnabled ? 'Enabled' : 'Disabled (Paused)';
+    });
+
+    if (extensionToggleCheck) {
+      extensionToggleCheck.addEventListener('change', (e) => {
+        const val = e.target.checked;
+        chrome.storage.local.set({ extensionEnabled: val }, () => {
+          if (toggleStateLabel) toggleStateLabel.textContent = val ? 'Enabled' : 'Disabled (Paused)';
+        });
+      });
+    }
+  }
 
   openSettingsButton.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();

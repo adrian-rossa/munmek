@@ -1,6 +1,6 @@
 ## Korean Lookup Rework Plan
 
-**Current direction:** keep the extension focused on Korean, remove subtitle handling, and make the hover popup the main interaction surface.
+**Current direction:** keep the extension focused on Korean, supporting both standard web page hover lookups and video subtitle integration (asbplayer & uploaded context files) with interactive hover popups, local neural reranking, and AnkiConnect exports.
 
 ### Completed
 1. Local lookup path: hover extraction, candidate generation, and dictionary ranking from packaged JSON seed.

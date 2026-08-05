@@ -13,27 +13,12 @@
     if (typeof globalThis.ort === 'undefined') return null;
 
     try {
-      if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-        const path = require('path');
-        const fs = require('fs');
-        const root = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL('') : process.cwd();
-        const modelPath = path.join(root, 'lib/models/koelectra_small_v3_int8.onnx');
-        const vocabPath = path.join(root, 'lib/models/vocab.txt');
-
-        if (fs.existsSync(modelPath) && fs.existsSync(vocabPath)) {
-          const modelBuffer = fs.readFileSync(modelPath);
-          const vocabText = fs.readFileSync(vocabPath, 'utf-8');
-          if (globalThis.WordPieceTokenizer) {
-            tokenizerInstance = new globalThis.WordPieceTokenizer(vocabText);
-          }
-          onnxSession = await globalThis.ort.InferenceSession.create(modelBuffer);
-          console.log('[Munmek ONNX] KoELECTRA-small v3 INT8 ONNX Model loaded into ONNXRuntime session!');
-          return onnxSession;
-        }
-      }
-
-      const modelUrl = typeof chrome !== 'undefined' && chrome.runtime ? chrome.runtime.getURL('lib/models/koelectra_small_v3_int8.onnx') : '';
-      const vocabUrl = typeof chrome !== 'undefined' && chrome.runtime ? chrome.runtime.getURL('lib/models/vocab.txt') : '';
+      const modelUrl = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL
+        ? chrome.runtime.getURL('lib/models/koelectra_small_v3_int8.onnx')
+        : '';
+      const vocabUrl = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL
+        ? chrome.runtime.getURL('lib/models/vocab.txt')
+        : '';
 
       if (!modelUrl || !vocabUrl) return null;
 

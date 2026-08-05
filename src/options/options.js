@@ -36,8 +36,8 @@ document.addEventListener('DOMContentLoaded', () => {
     { value: '{{pos}}', label: 'Part of Speech' },
     { value: '{{definition}}', label: 'Selected Dictionary Definition' },
     { value: '{{sentence}}', label: 'Target Sentence Context' },
-    { value: '{{prevSentence}}', label: 'Preceding Sentence' },
-    { value: '{{nextSentence}}', label: 'Subsequent Sentence' },
+    { value: '{{prevSentence}}', label: 'Preceding Sentence (−1)' },
+    { value: '{{prevSentence2}}', label: 'Preceding Sentence (−2)' },
     { value: '{{candidate}}', label: 'Selected Candidate Word' }
   ];
 

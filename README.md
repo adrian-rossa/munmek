@@ -65,25 +65,38 @@ Right-click the Munmek toolbar icon and select **Options** (or open `options.htm
 ```
 munmek/
 ├── manifest.json              # Manifest V3 Extension Manifest
-├── background.js              # Service Worker (Offscreen lifecycle, Gemini API, AnkiConnect)
-├── content.js                 # Core content script (Hover detection, DOM scraping, Range math)
-├── content_ui.js              # Tooltip UI renderer & template engine
-├── content.css                # Tooltip UI CSS stylesheet
-├── popup.html / popup.js      # Extension pin bar popup UI & controller
-├── popup.css                  # Popup CSS stylesheet
-├── options.html / options.js  # Extension settings UI & configuration controller
-├── options.css                # Settings page CSS stylesheet
-├── dictionary_db.js           # IndexedDB engine for fast offline dictionary queries
-├── korean_jamo.js             # Hangul alphabet decomposition/composition utility
-├── korean_lemmatizer.js       # Rule-based particle stripper & verb de-conjugator
-├── korean_pipeline.js         # Candidate generator orchestrator
-├── onnx_reranker.js           # KoELECTRA neural reranker module
-├── offscreen.html / .js       # Offscreen document host (Garu-ko WASM & ONNXRuntime-Web)
+├── package.json               # Dependencies and test script definition
+├── README.md                  # Project documentation & setup guide
+├── src/
+│   ├── background/
+│   │   └── background.js      # Service Worker (Offscreen lifecycle, Gemini API, AnkiConnect)
+│   ├── content/
+│   │   ├── content.js         # Core content script (Hover detection, DOM scraping, Range math)
+│   │   ├── content_ui.js      # Tooltip UI renderer & template engine
+│   │   └── content.css        # Tooltip UI CSS stylesheet
+│   ├── nlp/
+│   │   ├── korean_jamo.js     # Hangul alphabet decomposition/composition utility
+│   │   ├── korean_lemmatizer.js # Rule-based particle stripper & verb de-conjugator
+│   │   ├── korean_pipeline.js # Candidate generator orchestrator
+│   │   ├── dictionary_db.js   # IndexedDB engine for fast offline dictionary queries
+│   │   └── onnx_reranker.js   # KoELECTRA neural reranker module
+│   ├── offscreen/
+│   │   ├── offscreen.html     # Offscreen document HTML container
+│   │   └── offscreen.js       # Offscreen document host (Garu-ko WASM & ONNXRuntime-Web)
+│   ├── options/
+│   │   ├── options.html       # Extension settings UI
+│   │   ├── options.js         # Extension settings controller
+│   │   └── options.css        # Settings page CSS stylesheet
+│   └── popup/
+│       ├── popup.html         # Extension pin bar popup UI
+│       ├── popup.js           # Extension pin bar popup controller
+│       └── popup.css          # Popup CSS stylesheet
 ├── lib/
 │   ├── garu/                  # Garu-ko WASM binary & model files
 │   ├── models/                # Quantized KoELECTRA INT8 ONNX model & vocab.txt
 │   ├── onnx/                  # ONNXRuntime-Web engine & WordPiece tokenizer
 │   └── jszip.min.js           # ZIP extraction library for termbank imports
+└── test/                      # Vitest automated test suite
 ```
 
 ---

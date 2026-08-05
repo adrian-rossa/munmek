@@ -20,6 +20,13 @@
   font-family: Georgia, 'Times New Roman', serif;
   line-height: 1.5;
   user-select: text;
+  text-align: left;
+  letter-spacing: normal;
+  word-spacing: normal;
+}
+
+#munmek-tooltip.munmek-tooltip * {
+  box-sizing: border-box;
 }
 
 #munmek-tooltip .title {

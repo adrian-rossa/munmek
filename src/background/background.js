@@ -1,7 +1,7 @@
 function ensureDictionaryDbLoaded() {
   if (typeof self.DictionaryDB !== 'undefined') return true;
   try {
-    importScripts('dictionary_db.js');
+    importScripts('../nlp/dictionary_db.js');
     return typeof self.DictionaryDB !== 'undefined';
   } catch (e) {
     console.error("Failed to import dictionary_db.js", e);
@@ -11,21 +11,22 @@ function ensureDictionaryDbLoaded() {
 ensureDictionaryDbLoaded();
 
 const DEFAULT_MODEL_ID = 'gemini-2.0-flash-lite';
-const DEFAULT_PROMPT = `You are an expert Korean linguistic scholar and contextual analyzer.
-Analyze the Korean word '{WORD}' in the exact context of the sentence: '{SENTENCE}'.
-Context - Preceding sentence: '{PREV_SENTENCE}'.
-Context - Subsequent sentence: '{NEXT_SENTENCE}'.
+const DEFAULT_PROMPT = `Analyze the Korean word '{WORD}' in sentence: '{SENTENCE}'
+Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENCE2}'
 
-For EACH significant Korean word/phrase in '{SENTENCE}' (especially target '{WORD}'), provide a JSON object in the "words_analysis" array with these fields:
-- "surface": Exact word form as it appears in the sentence.
-- "base": Standard dictionary / base form.
-- "pos": Part of speech (e.g., "proper noun", "noun", "verb", "adjective", "particle", "honorific verb", "bound noun").
-- "definitions": Array of precise English definitions fitting this specific context.
-- "conjugation": (If applicable) Object with "ending" and "explanation" describing grammatical inflection, particles, or tense.
-- "grammar_notes": Provide rich, detailed contextual notes! Explain why this word is used in this sentence context, its exact role in the clause, any historical/cultural significance (e.g. historical titles, names, archaisms), tone, or grammatical nuances.
-- "id": Unique string ID.
+Rules:
+1. If '{WORD}' is a person's name or proper noun in context (e.g. before ~이에요/~예요/~야/~아/~씨/~님), set "pos": "proper noun" and definition to the name rather than forcing a dictionary homonym.
+2. Ground "grammar_notes" in the actual context of the surrounding sentences and scene.
 
-Return ONLY a single, valid JSON object with a top-level key "words_analysis". Do not include Markdown wrapping outside JSON.`;
+Return JSON with "words_analysis": [{
+  "surface": "{WORD}",
+  "base": "base form or name",
+  "pos": "part of speech",
+  "definitions": ["definition in context"],
+  "conjugation": { "ending": "...", "explanation": "..." },
+  "grammar_notes": "contextual breakdown based on scene/sentence context",
+  "id": "1"
+}]`;
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(['modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField'], (result) => {
@@ -59,7 +60,7 @@ async function ensureOffscreenDocument() {
   }
 
   offscreenCreating = chrome.offscreen.createDocument({
-    url: 'offscreen.html',
+    url: 'src/offscreen/offscreen.html',
     reasons: ['WORKERS'],
     justification: 'Run WASM Korean morphological analyzer for instant word lookups'
   });
@@ -103,20 +104,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === 'dictionaryLookup') {
-    if (!ensureDictionaryDbLoaded()) {
+    if (!ensureDictionaryDbLoaded() || !self.DictionaryDB) {
       sendResponse({ error: 'DictionaryDB service script is not loaded.' });
       return true;
     }
     chrome.storage.local.get(['dictionaryOrder'], (res) => {
       const order = res.dictionaryOrder || [];
-      if (request.method === 'lookupSurface') {
-        self.DictionaryDB.lookupSurface(request.text, request.dictId, order)
-          .then(hits => sendResponse({ hits }))
-          .catch(error => sendResponse({ error: error.toString() }));
-      } else if (request.method === 'lookupBase') {
-        self.DictionaryDB.lookupBase(request.text, request.dictId, order)
-          .then(hits => sendResponse({ hits }))
-          .catch(error => sendResponse({ error: error.toString() }));
+      try {
+        if (request.method === 'lookupSurface' && typeof self.DictionaryDB.lookupSurface === 'function') {
+          self.DictionaryDB.lookupSurface(request.text, request.dictId, order)
+            .then(hits => sendResponse({ hits }))
+            .catch(error => sendResponse({ error: error.toString() }));
+        } else if (request.method === 'lookupBase' && typeof self.DictionaryDB.lookupBase === 'function') {
+          self.DictionaryDB.lookupBase(request.text, request.dictId, order)
+            .then(hits => sendResponse({ hits }))
+            .catch(error => sendResponse({ error: error.toString() }));
+        } else {
+          sendResponse({ error: 'Invalid dictionaryLookup method.' });
+        }
+      } catch (err) {
+        sendResponse({ error: err.toString() });
       }
     });
     return true;
@@ -216,6 +223,12 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
       }
 
       const prompt = buildSentenceAnalysisPrompt(config.aiPromptExtension, data, Boolean(config.useFullContext), config.responseLanguage, config.customResponseLanguage);
+      console.log('[Munmek Gemini ContextSentencesSent]', {
+        word: data.word,
+        sentence: data.sentence,
+        prevSentence: data.prevSentence || '(none)',
+        prevSentence2: data.prevSentence2 || '(none)'
+      });
       const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelId}:generateContent?key=${config.apiKey}`;
 
       const response = await fetch(apiUrl, {
@@ -348,7 +361,7 @@ function buildSentenceAnalysisPrompt(userExtension, data, useFullContext = false
     word: data.word || '',
     sentence: data.sentence || '',
     prevSentence: data.prevSentence || '',
-    nextSentence: data.nextSentence || ''
+    prevSentence2: data.prevSentence2 || ''
   };
 
   let promptText = replacePromptPlaceholders(DEFAULT_PROMPT, context);
@@ -382,7 +395,7 @@ function trackDynamicGeminiFields(responseObj) {
 
     const reservedKeys = new Set([
       'words_analysis', 'words', 'analysis', 'conjugation', 'translation', 'grammar',
-      'notes', 'hanja', 'pos', 'word', 'base', 'sentence', 'prevSentence', 'nextSentence',
+      'notes', 'hanja', 'pos', 'word', 'base', 'sentence', 'prevSentence', 'prevSentence2',
       'candidate', 'definition'
     ]);
 
@@ -414,7 +427,7 @@ function replacePromptPlaceholders(prompt, context) {
     .replace(/\{WORD\}/g, context.word)
     .replace(/\{SENTENCE\}/g, context.sentence)
     .replace(/\{PREV_SENTENCE\}/g, context.prevSentence || '')
-    .replace(/\{NEXT_SENTENCE\}/g, context.nextSentence || '')
+    .replace(/\{PREV_SENTENCE2\}/g, context.prevSentence2 || '')
     .replace(/\{DICTIONARY_ENTRY\}/g, context.dictionaryCandidate ? JSON.stringify(context.dictionaryCandidate, null, 2) : '');
 }
 
@@ -506,7 +519,7 @@ function buildTemplateContext(data) {
     notes: activeAnalysisObj.notes || dictionaryEntry.grammar_notes || '',
     sentence: data.sentence || '',
     prevSentence: data.prevSentence || '',
-    nextSentence: data.nextSentence || '',
+    prevSentence2: data.prevSentence2 || '',
     candidate: data.candidate || '',
     analysisJson: rawAnalysis && Object.keys(rawAnalysis).length > 0 ? JSON.stringify(rawAnalysis, null, 2) : (rawQuick && Object.keys(rawQuick).length > 0 ? JSON.stringify(rawQuick, null, 2) : '')
   };
