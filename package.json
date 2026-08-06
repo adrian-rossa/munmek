@@ -4,7 +4,7 @@
   "description": "Munmek (문맥) - Fast, context-aware Korean hover-lookup browser extension with local termbanks, KoELECTRA ONNX neural reranking, optional Gemini Flash explanations, and AnkiConnect card creation.",
   "main": "background.js",
   "scripts": {
-    "test": "vitest run"
+    "test": "npx vitest run"
   },
   "repository": {
     "type": "git",

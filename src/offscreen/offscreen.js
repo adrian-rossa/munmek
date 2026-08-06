@@ -124,6 +124,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     })();
     return true;
   }
+
+  if (request.type === 'OFFSCREEN_RERANK_DICTIONARY_ENTRIES') {
+    (async () => {
+      try {
+        let reranked = request.entries || [];
+        if (typeof globalThis.OnnxReranker !== 'undefined' && globalThis.OnnxReranker.rerankDictionaryEntriesAsync) {
+          reranked = await globalThis.OnnxReranker.rerankDictionaryEntriesAsync(reranked, request.sentenceContext || '', request.word || '');
+        } else if (typeof globalThis.OnnxReranker !== 'undefined' && globalThis.OnnxReranker.rerankDictionaryEntries) {
+          reranked = globalThis.OnnxReranker.rerankDictionaryEntries(reranked, request.sentenceContext || '', request.word || '');
+        }
+        sendResponse({ ok: true, entries: reranked });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message });
+      }
+    })();
+    return true;
+  }
 });
 
 // Pre-initialize WASM engine when offscreen document is opened

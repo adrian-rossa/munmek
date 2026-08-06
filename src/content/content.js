@@ -319,7 +319,15 @@
       paragraphText = normalizeText((cueEl || asbplayerContainer).textContent || textContent);
       recordSubtitleLine(paragraphText);
     } else {
-      paragraphText = normalizeText(node.parentElement?.textContent || textContent);
+      let blockContainer = node.parentElement;
+      while (blockContainer && blockContainer !== document.body && blockContainer !== document.documentElement) {
+        const tagName = blockContainer.tagName ? blockContainer.tagName.toLowerCase() : '';
+        if (['p', 'li', 'td', 'th', 'article', 'section', 'div', 'blockquote', 'dd', 'dt'].includes(tagName)) {
+          break;
+        }
+        blockContainer = blockContainer.parentElement;
+      }
+      paragraphText = normalizeText((blockContainer || node.parentElement)?.textContent || textContent);
     }
 
     let sentenceWindow = getSentenceWindow(paragraphText, word);
@@ -434,14 +442,34 @@
 
           if (res && res.hits && res.hits.length > 0) {
             if (currentHoverState && currentHoverState.word === state.word) {
-              const sortedHits = sortHitsByBaseForm(res.hits);
+              let sortedHits = sortHitsByBaseForm(res.hits);
+              try {
+                if (typeof window.DictionaryReranker !== 'undefined' && typeof window.DictionaryReranker.rerankDictionaryEntries === 'function') {
+                  sortedHits = window.DictionaryReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
+                } else if (typeof window.OnnxReranker !== 'undefined' && typeof window.OnnxReranker.rerankDictionaryEntries === 'function') {
+                  sortedHits = window.OnnxReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
+                }
+              } catch (rerankErr) {
+                console.warn('[Munmek] Rerank fallback notice:', rerankErr);
+              }
               currentHoverState.dictionaryEntries = sortedHits;
               currentHoverState.dictionaryEntry = sortedHits[0];
               currentHoverState.dictionaryMatch = candidate.text;
               currentHoverState.selectedGroupIndex = 0;
               currentHoverState.quickFallback = null;
               currentHoverState.lookupReason = `IndexedDB Surface Match (${sortedHits[0].dictTitle || 'Local'})`;
+
+              const matchedEntryIdx = sortedHits.findIndex(e => e && e._koelectraMatched);
+              if (matchedEntryIdx >= 0) {
+                const matchedEntry = sortedHits[matchedEntryIdx];
+                currentHoverState.koelectraMatchedItemIndex = matchedEntryIdx;
+                currentHoverState.koelectraMatchedDefIndex = matchedEntry._bestDefIndex || 0;
+                currentHoverState[`selectedDefIndex_${matchedEntryIdx}`] = matchedEntry._bestDefIndex || 0;
+                currentHoverState.selectedDefinitionIndex = matchedEntry._bestDefIndex || 0;
+              }
+
               rerenderCurrentTooltip();
+              triggerDictionaryEntryReranking(state, sortedHits, candidate.text);
             }
             return;
           }
@@ -457,25 +485,79 @@
 
           if (res && res.hits && res.hits.length > 0) {
             if (currentHoverState && currentHoverState.word === state.word) {
-              const sortedHits = sortHitsByBaseForm(res.hits);
+              let sortedHits = sortHitsByBaseForm(res.hits);
+              try {
+                if (typeof window.DictionaryReranker !== 'undefined' && typeof window.DictionaryReranker.rerankDictionaryEntries === 'function') {
+                  sortedHits = window.DictionaryReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
+                } else if (typeof window.OnnxReranker !== 'undefined' && typeof window.OnnxReranker.rerankDictionaryEntries === 'function') {
+                  sortedHits = window.OnnxReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
+                }
+              } catch (rerankErr) {
+                console.warn('[Munmek] Rerank fallback notice:', rerankErr);
+              }
               currentHoverState.dictionaryEntries = sortedHits;
               currentHoverState.dictionaryEntry = sortedHits[0];
               currentHoverState.dictionaryMatch = candidate.text;
               currentHoverState.selectedGroupIndex = 0;
               currentHoverState.quickFallback = null;
               currentHoverState.lookupReason = `IndexedDB Base Match (${sortedHits[0].dictTitle || 'Local'})`;
+
+              const matchedEntryIdx = sortedHits.findIndex(e => e && e._koelectraMatched);
+              if (matchedEntryIdx >= 0) {
+                const matchedEntry = sortedHits[matchedEntryIdx];
+                currentHoverState.koelectraMatchedItemIndex = matchedEntryIdx;
+                currentHoverState.koelectraMatchedDefIndex = matchedEntry._bestDefIndex || 0;
+                currentHoverState[`selectedDefIndex_${matchedEntryIdx}`] = matchedEntry._bestDefIndex || 0;
+                currentHoverState.selectedDefinitionIndex = matchedEntry._bestDefIndex || 0;
+              }
+
               rerenderCurrentTooltip();
+              triggerDictionaryEntryReranking(state, sortedHits, candidate.text);
             }
             return;
           }
         }
 
         if (currentHoverState && currentHoverState.word === state.word && (!currentHoverState.dictionaryEntries || currentHoverState.dictionaryEntries.length === 0)) {
-          currentHoverState.lookupReason = 'No offline dictionary match found. Click a candidate chip above for Quick LLM Lookup.';
+          currentHoverState.lookupReason = 'No offline dictionary match found. Select a candidate chip for Quick LLM Lookup.';
         }
       } catch (err) {
         console.warn('[Munmek] IndexedDB lookup notice:', err);
       }
+    }
+  }
+
+  function triggerDictionaryEntryReranking(state, entries, candidateWord) {
+    if (!state || !entries || entries.length === 0 || !state.sentence) return;
+
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage(
+        {
+          type: 'rerankDictionaryEntries',
+          entries: entries,
+          sentenceContext: state.sentence,
+          word: candidateWord || state.word
+        },
+        (response) => {
+          if (response && response.ok && Array.isArray(response.entries) && response.entries.length > 0 && !response.disabled) {
+            if (currentHoverState && currentHoverState.word === state.word) {
+              const rerankedEntries = response.entries;
+              currentHoverState.dictionaryEntries = rerankedEntries;
+              currentHoverState.dictionaryEntry = rerankedEntries[0];
+
+              const matchedEntryIdx = rerankedEntries.findIndex(e => e && e._koelectraMatched);
+              if (matchedEntryIdx >= 0) {
+                const matchedEntry = rerankedEntries[matchedEntryIdx];
+                currentHoverState.koelectraMatchedItemIndex = matchedEntryIdx;
+                currentHoverState.koelectraMatchedDefIndex = matchedEntry._bestDefIndex || 0;
+                currentHoverState[`selectedDefIndex_${matchedEntryIdx}`] = matchedEntry._bestDefIndex || 0;
+                currentHoverState.selectedDefinitionIndex = matchedEntry._bestDefIndex || 0;
+              }
+              rerenderCurrentTooltip();
+            }
+          }
+        }
+      );
     }
   }
 

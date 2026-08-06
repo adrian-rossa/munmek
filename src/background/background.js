@@ -80,6 +80,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === 'rerankDictionaryEntries') {
+    handleRerankDictionaryEntriesRequest(request.entries, request.sentenceContext, request.word, sendResponse);
+    return true;
+  }
+
   if (request.type === 'analyzeSentence') {
     handleSentenceAnalysisRequest(request.data, sendResponse, sender);
     return true;
@@ -175,6 +180,32 @@ function handleRerankCandidatesRequest(candidates, sentenceContext, sendResponse
       await ensureOffscreenDocument();
       chrome.runtime.sendMessage(
         { type: 'OFFSCREEN_RERANK_CANDIDATES', candidates, sentenceContext },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          sendResponse(response || { ok: false, error: 'No response from offscreen document' });
+        }
+      );
+    } catch (err) {
+      sendResponse({ ok: false, error: err.message });
+    }
+  });
+}
+
+function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, sendResponse) {
+  chrome.storage.local.get(['enableOnnxReranker'], async (result) => {
+    const isEnabled = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : true;
+    if (!isEnabled) {
+      sendResponse({ ok: true, entries: entries || [], disabled: true });
+      return;
+    }
+
+    try {
+      await ensureOffscreenDocument();
+      chrome.runtime.sendMessage(
+        { type: 'OFFSCREEN_RERANK_DICTIONARY_ENTRIES', entries, sentenceContext, word },
         (response) => {
           if (chrome.runtime.lastError) {
             sendResponse({ ok: false, error: chrome.runtime.lastError.message });

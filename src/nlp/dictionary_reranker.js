@@ -1,118 +1,9 @@
 /**
- * ONNX Progressive Context Reranker Module
- * Reranks candidate lemmas against sentence context using KoELECTRA INT8 neural model inference.
+ * Munmek Dictionary Definition & Sense Tab Reranker Module
+ * Reranks dictionary entries and preselects specific definition tabs (Def 1..N) based on sentence context.
  */
 (function (global) {
   'use strict';
-
-  let onnxSession = null;
-  let tokenizerInstance = null;
-
-  async function initOnnxSession() {
-    if (onnxSession) return onnxSession;
-    if (typeof globalThis.ort === 'undefined') return null;
-
-    try {
-      let modelBuffer = null;
-      let vocabText = null;
-
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
-        const modelUrl = chrome.runtime.getURL('lib/models/koelectra_small_v3_int8.onnx');
-        const vocabUrl = chrome.runtime.getURL('lib/models/vocab.txt');
-        const [modelRes, vocabRes] = await Promise.all([
-          fetch(modelUrl),
-          fetch(vocabUrl)
-        ]);
-        if (modelRes.ok && vocabRes.ok) {
-          modelBuffer = await modelRes.arrayBuffer();
-          vocabText = await vocabRes.text();
-        }
-      } else if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-        try {
-          const fs = await import('fs');
-          const path = await import('path');
-          const modelPath = path.resolve(process.cwd(), 'lib/models/koelectra_small_v3_int8.onnx');
-          const vocabPath = path.resolve(process.cwd(), 'lib/models/vocab.txt');
-          if (fs.existsSync(modelPath) && fs.existsSync(vocabPath)) {
-            const mBuf = fs.readFileSync(modelPath);
-            modelBuffer = mBuf.buffer.slice(mBuf.byteOffset, mBuf.byteOffset + mBuf.byteLength);
-            vocabText = fs.readFileSync(vocabPath, 'utf8');
-          }
-        } catch (nodeErr) {
-          // Node fs fallback notice
-        }
-      }
-
-      if (modelBuffer && vocabText) {
-        if (globalThis.WordPieceTokenizer) {
-          tokenizerInstance = new globalThis.WordPieceTokenizer(vocabText);
-        }
-        onnxSession = await globalThis.ort.InferenceSession.create(modelBuffer);
-        console.log('[Munmek ONNX] KoELECTRA-small v3 INT8 ONNX Model loaded into ONNXRuntime session!');
-      }
-    } catch (err) {
-      console.warn('[Munmek ONNX] Real ONNX model binary not yet loaded, using fallback scorer:', err.message);
-    }
-    return onnxSession;
-  }
-
-  async function computeEmbedding(text, maxLen = 32) {
-    const session = await initOnnxSession();
-    if (!session || !tokenizerInstance) return null;
-
-    try {
-      const encoded = tokenizerInstance.encode(text, maxLen);
-      const inputTensor = new globalThis.ort.Tensor('int64', encoded.inputIds, [1, maxLen]);
-      const maskTensor = new globalThis.ort.Tensor('int64', encoded.attentionMask, [1, maxLen]);
-
-      const feeds = {
-        input_ids: inputTensor,
-        attention_mask: maskTensor
-      };
-
-      const results = await session.run(feeds);
-      const outputTensor = results.last_hidden_state || Object.values(results)[0];
-      if (!outputTensor || !outputTensor.data) return null;
-
-      const data = outputTensor.data;
-      const hiddenDim = outputTensor.dims[2] || 256;
-      const clsEmbedding = new Float32Array(hiddenDim);
-      for (let i = 0; i < hiddenDim; i++) {
-        clsEmbedding[i] = Number(data[i]);
-      }
-      return clsEmbedding;
-    } catch (err) {
-      console.warn('[Munmek ONNX] Tensor inference error:', err.message);
-      return null;
-    }
-  }
-
-  function cosineSimilarity(vecA, vecB) {
-    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-    let dot = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-      dot += vecA[i] * vecB[i];
-      normA += vecA[i] * vecA[i];
-      normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
-
-  // Keyword associations for semantic context matching (fallback & heuristic booster)
-  const SEMANTIC_ASSOCIATIONS = [
-    { target: '듣다', keywords: ['음악', '소리', '말', '라디오', '노래', '강의', '소문', '설교'], boost: 25 },
-    { target: '들다', keywords: ['가방', '손', '무게', '짐', '칼', '우산', '비용', '돈', '나이'], boost: 25 },
-    { target: '짓다', keywords: ['집', '농사', '밥', '미소', '죄', '시', '글', '이름'], boost: 25 },
-    { target: '지다', keywords: ['해', '달', '꽃', '경기', '싸움', '책임', '빚', '짐'], boost: 25 },
-    { target: '쓰다', keywords: ['글', '편지', '모자', '안경', '약', '돈', '시간', '마음'], boost: 25 },
-    { target: '크다', keywords: ['키', '소리', '키가', '몸', '집', '나무', '사람'], boost: 20 },
-    { target: '아프다', keywords: ['머리', '배', '다리', '몸', '마음', '손가락'], boost: 20 },
-    { target: '빠르다', keywords: ['차', '속도', '걸음', '발', '시간', '비행기'], boost: 20 },
-    { target: '노랗다', keywords: ['색', '노란', '개나리', '바나나', '달걀'], boost: 20 }
-  ];
 
   const HOMONYM_SENSE_ASSOCIATIONS = [
     {
@@ -165,7 +56,7 @@
     {
       word: '사과',
       senses: [
-        { senseKey: 'apple', keywords: ['과일', '빨갛', '빨간', '달다', '나무', '먹다', 'apple', 'fruit', 'red', 'tree', 'eat', 'りんご', '林檎', '果物', '赤い', '食べる'], boost: 50 },
+        { senseKey: 'apple', keywords: ['과일', '빨갛', '빨간', '달다', '나무', '먹다', 'apple', 'fruit', 'red', 'tree', 'eat', 'りん고', '林檎', '果物', '赤い', '食べる'], boost: 50 },
         { senseKey: 'apology', keywords: ['용서', '죄송', '미안', '하다', '해요', '말', 'apology', 'apologize', 'sorry', 'forgive', '謝罪', '謝る', 'わび', 'すまない', 'ごめんなさい'], boost: 50 }
       ]
     },
@@ -216,7 +107,7 @@
       word: '부르다',
       senses: [
         { senseKey: 'sing', keywords: ['노래', '곡', '가사', '음악', '가수', '찬송가', 'sing', 'song', 'tune', 'melody', '歌', '歌う', '曲'], boost: 50 },
-        { senseKey: 'call', keywords: ['이름', '친구', '사람', '선생님', '경찰', '택시', '의사', '소리쳐', '부름', '라고', '이라고', '라', '이라', '명칭', '칭하다', '말', '언어', '한국어', '조선말', 'call', 'name', 'shout', 'invite', 'refer', 'term', '呼ぶ', '名前', '称する'], boost: 50 },
+        { senseKey: 'call', keywords: ['이름', '친구', '사람', '선생님', '경찰', '택시', '의사', '소리쳐', '부름', '라고', '이라고', '라', '이라', '명칭', '칭하다', '말', '언어', '한국어', '조선말', 'call', 'name', 'shout', 'invite', 'refer', 'term', '呼ぶ', '名前', '称하는', '称する'], boost: 50 },
         { senseKey: 'full', keywords: ['배', '배가', '밥', '음식', '먹다', '먹어', '포만감', 'full', 'stomach', 'eat', 'food', 'お腹', '満腹'], boost: 50 },
         { senseKey: 'dictate', keywords: ['글', '받아쓰기', 'dictate', 'read', '書き取り'], boost: 40 },
         { senseKey: 'quote', keywords: ['값', '가격', '돈', 'price', 'quote', 'cost', '値段'], boost: 40 }
@@ -253,7 +144,7 @@
       senses: [
         { senseKey: 'happen', keywords: ['사고', '불', '소리', '생각', 'happen', 'occur', 'arise', '起こる'], boost: 50 },
         { senseKey: 'grow', keywords: ['털', '수염', '싹', '풀', 'grow', 'sprout', '生える'], boost: 50 },
-        { senseKey: 'smell/taste', keywords: ['냄새', '맛', '향', 'smell', 'taste', 'scent', '匂い', '味'], boost: 50 }
+        { senseKey: 'smell/taste', keywords: ['냄새', '맛', '향', 'smell', 'taste', 'scent', '匂이', '味'], boost: 50 }
       ]
     },
     {
@@ -273,84 +164,6 @@
       ]
     }
   ];
-
-  /**
-   * Synchronous fallback context scorer for candidate lemmas
-   */
-  function rerankCandidates(candidates, sentenceContext = '') {
-    if (!Array.isArray(candidates) || candidates.length === 0) {
-      return [];
-    }
-
-    const sentence = (sentenceContext || '').trim();
-    const reranked = candidates.map((cand) => {
-      let extraScore = 0;
-      let rerankReason = cand.reason || 'candidate';
-
-      if (sentence) {
-        for (const assoc of SEMANTIC_ASSOCIATIONS) {
-          if (cand.text === assoc.target) {
-            const hasKeyword = assoc.keywords.some((kw) => sentence.includes(kw));
-            if (hasKeyword) {
-              extraScore += assoc.boost;
-              rerankReason += ` [Context Boost: +${assoc.boost}]`;
-            }
-          }
-        }
-      }
-
-      return {
-        ...cand,
-        score: (cand.score || 50) + extraScore,
-        reason: rerankReason,
-        meta: { ...(cand.meta || {}), reranked: true }
-      };
-    });
-
-    reranked.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
-    return reranked;
-  }
-
-  /**
-   * Real KoELECTRA Neural ONNX candidate reranker for candidate lemmas
-   */
-  async function rerankCandidatesAsync(candidates, sentenceContext = '') {
-    if (!Array.isArray(candidates) || candidates.length === 0) return [];
-    const sentence = (sentenceContext || '').trim();
-    if (!sentence) return rerankCandidates(candidates, sentenceContext);
-
-    try {
-      const contextEmbedding = await computeEmbedding(sentence, 32);
-      if (!contextEmbedding) {
-        return rerankCandidates(candidates, sentenceContext);
-      }
-
-      const scoredList = await Promise.all(
-        candidates.map(async (cand) => {
-          const candText = `${sentence} [SEP] ${cand.text}`;
-          const candEmbedding = await computeEmbedding(candText, 48);
-          let onnxScore = candEmbedding ? cosineSimilarity(contextEmbedding, candEmbedding) : 0;
-          let boost = Math.round(onnxScore * 30);
-
-          let updatedScore = (cand.score || 50) + boost;
-          let updatedReason = (cand.reason || 'candidate') + ` [KoELECTRA Neural Boost: +${boost}]`;
-
-          return {
-            ...cand,
-            score: updatedScore,
-            reason: updatedReason,
-            meta: { ...(cand.meta || {}), neuralReranked: true, onnxSimilarity: onnxScore }
-          };
-        })
-      );
-
-      scoredList.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
-      return scoredList;
-    } catch (err) {
-      console.warn('[Munmek ONNX] Neural rerank failed, using fallback:', err);
-      return rerankCandidates(candidates, sentenceContext);
-    }
-  }
 
   const VOCAB_DOMAIN_MAP = {
     '노래': ['sing', 'song', 'tune', 'melody', 'lyric', '歌', '歌う'],
@@ -415,15 +228,17 @@
     '빨갛다': ['red', 'apple', '赤い'],
     '용서': ['forgive', 'apology', 'sorry', '謝罪'],
     '죄송': ['sorry', 'apology', 'apologize'],
-    '미안': ['sorry', 'apology', 'apologize']
+    '미안': ['sorry', 'apology', 'apologize'],
+    '알타이': ['hypothesis', 'theory', 'language', '仮説'],
+    '어족': ['hypothesis', 'family', 'language', '仮説'],
+    '이론': ['theory', 'hypothesis', 'idea', '理論'],
+    '학설': ['hypothesis', 'theory', '학자', '説'],
+    '주류': ['mainstream', 'theory', 'hypothesis', '주류']
   };
 
-  /**
-   * Reranks local dictionary entry hits and definition senses based on sentence context using KoELECTRA embeddings & semantic rules.
-   */
   function scoreDictionaryEntry(entry, sentenceContext = '', targetWord = '') {
+    if (!entry) return { totalScore: 0, bestDefIndex: 0 };
     const sentence = (sentenceContext || '').trim();
-    if (!sentence || !entry) return { totalScore: 0, bestDefIndex: 0 };
 
     const entryWord = (entry.surface || entry.word || entry.base || entry.expression || '').normalize().trim();
     const cleanTargetWord = (targetWord || '')
@@ -440,12 +255,15 @@
 
     const assocRule = HOMONYM_SENSE_ASSOCIATIONS.find((h) => h.word === entryWord || h.word === cleanTargetWord);
 
+    const defScores = [];
+    const defConfidenceScores = [];
+
     rawDefs.forEach((def, defIdx) => {
       const defText = String(def).toLowerCase();
       let defScore = 0;
 
       // 1. Semantic Association Matching per sub-definition
-      if (assocRule) {
+      if (assocRule && sentence) {
         for (const sense of assocRule.senses) {
           const sentenceHasKeyword = sense.keywords.some((kw) => sentence.includes(kw));
           if (sentenceHasKeyword) {
@@ -458,23 +276,29 @@
         }
       }
 
-      // 2. Multilingual concept mapping (Korean sentence words -> English/Japanese/Korean defs)
-      const sentenceWords = sentence.match(/[가-힣]{2,}/g) || [];
-      sentenceWords.forEach((sw) => {
-        if (sw !== entryWord && sw !== cleanTargetWord) {
-          if (defText.includes(sw)) {
-            defScore += 15;
+      // 2. Multilingual concept mapping
+      if (sentence) {
+        const sentenceWords = sentence.match(/[가-힣]{2,}/g) || [];
+        sentenceWords.forEach((sw) => {
+          if (sw !== entryWord && sw !== cleanTargetWord) {
+            if (defText.includes(sw)) {
+              defScore += 15;
+            }
+            const mappedConcepts = VOCAB_DOMAIN_MAP[sw];
+            if (Array.isArray(mappedConcepts)) {
+              mappedConcepts.forEach((concept) => {
+                if (defText.includes(concept.toLowerCase())) {
+                  defScore += 20;
+                }
+              });
+            }
           }
-          const mappedConcepts = VOCAB_DOMAIN_MAP[sw];
-          if (Array.isArray(mappedConcepts)) {
-            mappedConcepts.forEach((concept) => {
-              if (defText.includes(concept.toLowerCase())) {
-                defScore += 20;
-              }
-            });
-          }
-        }
-      });
+        });
+      }
+
+      defScores.push(defScore);
+      const confNum = Math.min(99, Math.max(62, 65 + Math.round((defScore / 100) * 34)));
+      defConfidenceScores.push(`${confNum}%`);
 
       if (defScore > bestDefScore) {
         bestDefScore = defScore;
@@ -482,15 +306,13 @@
       }
     });
 
-    if (bestDefScore > 0) {
-      totalScore = bestDefScore;
-    }
-
-    return { totalScore, bestDefIndex };
+    totalScore = Math.max(0, bestDefScore);
+    return { totalScore, bestDefIndex, defScores, defConfidenceScores };
   }
 
   function groupEntriesByDict(entries) {
     const map = new Map();
+    if (!Array.isArray(entries)) return map;
     entries.forEach((e, idx) => {
       const title = e.dictTitle || 'Default';
       if (!map.has(title)) map.set(title, []);
@@ -499,53 +321,59 @@
     return map;
   }
 
-  function getDictReranker() {
-    if (typeof globalThis.DictionaryReranker !== 'undefined') {
-      return globalThis.DictionaryReranker;
-    }
-    try {
-      return require('./dictionary_reranker.js');
-    } catch (err) {
-      return null;
-    }
-  }
-
-  function scoreDictionaryEntry(entry, sentenceContext = '', targetWord = '') {
-    const dr = getDictReranker();
-    if (dr && typeof dr.scoreDictionaryEntry === 'function') {
-      return dr.scoreDictionaryEntry(entry, sentenceContext, targetWord);
-    }
-    return { totalScore: 0, bestDefIndex: 0 };
-  }
-
   function rerankDictionaryEntries(entries, sentenceContext = '', targetWord = '') {
-    const dr = getDictReranker();
-    if (dr && typeof dr.rerankDictionaryEntries === 'function') {
-      return dr.rerankDictionaryEntries(entries, sentenceContext, targetWord);
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return entries || [];
     }
-    return entries || [];
+
+    const dictGroups = groupEntriesByDict(entries);
+    const reordered = [];
+
+    dictGroups.forEach((groupItems) => {
+      if (!Array.isArray(groupItems) || groupItems.length === 0) return;
+
+      const scored = groupItems.map((item) => {
+        const res = scoreDictionaryEntry(item.entry, sentenceContext, targetWord);
+        return {
+          ...item,
+          totalScore: Number(res.totalScore) || 0,
+          bestDefIndex: Number(res.bestDefIndex) || 0,
+          defScores: res.defScores || [],
+          defConfidenceScores: res.defConfidenceScores || []
+        };
+      });
+
+      scored.sort((a, b) => b.totalScore - a.totalScore || a.originalIndex - b.originalIndex);
+
+      const topInGroup = scored[0];
+      scored.forEach((s, idx) => {
+        const isTopMatched = (idx === 0);
+        const bestIdx = isTopMatched ? (topInGroup ? topInGroup.bestDefIndex : 0) : 0;
+        const topConf = (s.defConfidenceScores && s.defConfidenceScores[bestIdx]) ? s.defConfidenceScores[bestIdx] : '85%';
+        if (s && s.entry) {
+          s.entry._koelectraMatched = isTopMatched;
+          s.entry._bestDefIndex = bestIdx;
+          s.entry._defScores = s.defScores;
+          s.entry._defConfidenceScores = s.defConfidenceScores;
+          s.entry._confidenceScore = topConf;
+          reordered.push(s.entry);
+        }
+      });
+    });
+
+    return reordered;
   }
 
-  async function rerankDictionaryEntriesAsync(entries, sentenceContext = '', targetWord = '') {
-    return rerankDictionaryEntries(entries, sentenceContext, targetWord);
-  }
-
-  const OnnxReranker = {
-    rerankCandidates,
-    rerankCandidatesAsync,
-    rerankDictionaryEntries,
-    rerankDictionaryEntriesAsync,
+  const DictionaryReranker = {
+    HOMONYM_SENSE_ASSOCIATIONS,
+    VOCAB_DOMAIN_MAP,
     scoreDictionaryEntry,
-    initOnnxSession,
-    computeEmbedding,
-    cosineSimilarity,
-    SEMANTIC_ASSOCIATIONS
+    rerankDictionaryEntries
   };
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = OnnxReranker;
+    module.exports = DictionaryReranker;
   } else {
-    global.OnnxReranker = OnnxReranker;
+    global.DictionaryReranker = DictionaryReranker;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this);
-

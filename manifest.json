@@ -17,6 +17,8 @@
         "src/nlp/korean_jamo.js",
         "src/nlp/korean_lemmatizer.js",
         "src/nlp/korean_pipeline.js",
+        "src/nlp/dictionary_reranker.js",
+        "src/nlp/onnx_reranker.js",
         "src/nlp/dictionary_db.js",
         "src/content/content_ui.js",
         "src/content/content.js"

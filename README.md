@@ -14,8 +14,11 @@ Credits for the amazing [blog post](https://kimchi-reader.app/blog/int8-cpu-kore
 - ⚡ **Hybrid Morphological Lemmatizer**:
   - **Tier 1 (Instant Pure-JS Rule Engine)**: Hangul Jamo decomposition (초성/중성/종성), particle (조사) stripping, honorific/tense recovery, and irregular verb/adjective de-conjugations (`ㅂ`, `ㄷ`, `ㄹ`, `ㅅ`, `ㅎ`, `ㅡ`, `르`).
   - **Tier 2 (Garu-ko WASM Analyzer)**: Runs a compact WebAssembly analyzer (~1.8 MB) inside a Manifest V3 Offscreen Document to extract base dictionary stems offline.
-- 🧠 **KoELECTRA INT8 ONNX Candidate Reranker**: Runs local ONNXRuntime-Web neural model inference (`koelectra_small_v3_int8.onnx`) with WordPiece tokenization and `[CLS]` embedding cosine similarity scoring to disambiguate homonyms in context.
-- 📚 **IndexedDB Termbank Engine & Priority Ranking**: Import full Yomichan KO-EN / KO-JP `.zip` or `.json` dictionary termbanks (e.g. KRDICT) to store 100,000+ entries in local IndexedDB. Customize dictionary search priority order with interactive Move Up / Move Down controls.
+- 🧠 **Multi-Stage Progressive Neural Reranker & Sense Preselector**:
+  - **Stage 0 (Instant Optimistic Local Heuristic, < 1ms)**: Re-orders local dictionary entries on Frame 1 (< 1ms) using fast keyword & domain mapping. It preselects the best-matching definition tab (`Def 1` .. `Def N`) and displays an initial `✨ Context Matched · XX%` badge with zero UI lag.
+  - **Stage 1 (KoELECTRA INT8 ONNX, ~14.3 MB)**: Runs pure Korean candidate deinflection lemma reranking inside a Manifest V3 Offscreen Document, ranking candidate stems (e.g. `[듣다]` vs `[들다]`, `[짓다]` vs `[지다]`).
+  - **Stage 2 (Multilingual E5 INT8 ONNX, ~118 MB)**: Asynchronously computes cross-lingual bi-encoder vector embeddings mapping Korean sentence context directly to English (`KRDICT EN`), Japanese (`KRDICT JA`), or Korean definition tabs for deep semantic sense disambiguation. Once inference completes (~50–150ms), it seamlessly updates the `✨ Context Matched · XX%` badge and tab selection with the final neural confidence score.
+- 📚 **IndexedDB Termbank Engine & Priority Ranking**: Import full Yomichan KO-EN / KO-JP `.zip` or `.json` dictionary termbanks (e.g. KRDICT) to store 100,000+ entries in local IndexedDB. Supports tabbed multi-dictionary rendering with tab-scoped neural & domain-matched homonym sense preselection and interactive Move Up / Move Down priority controls.
 - 🤖 **On-Demand Gemini AI Explanations**: Click "Ask Gemini" inside the hover tooltip for context-aware grammar notes, clause analysis, and nuances. Sentence analyses are automatically cached across words in the same sentence. Flash models are fast which makes them suitable for this use case. The extension is designed with token usage in mind so that it can be used for free.
 - 📄 **Extension Pin Bar Context Extractor**: Extract active webpage article text or ASBPlayer video subtitles, automatically summarize them with Gemini for token efficiency, and attach them as additional background context for AI lookups.
 - 🎴 **Interactive AnkiConnect Card Export**: One-click card export to Anki desktop with custom deck selection, note types, and dynamic field mapping (including custom LLM JSON fields). Supports creating new cards or updating the last created card (e.g., from ASBPlayer).
@@ -71,6 +74,9 @@ munmek/
 ├── manifest.json              # Manifest V3 Extension Manifest
 ├── package.json               # Dependencies and test script definition
 ├── README.md                  # Project documentation & setup guide
+├── scripts/
+│   ├── export_koelectra_onnx.py  # Export PyTorch KoELECTRA to INT8 ONNX
+│   └── export_multilingual_onnx.py # Export PyTorch Multilingual-E5 to INT8 ONNX
 ├── src/
 │   ├── background/
 │   │   └── background.js      # Service Worker (Offscreen lifecycle, Gemini API, AnkiConnect)
@@ -83,7 +89,7 @@ munmek/
 │   │   ├── korean_lemmatizer.js # Rule-based particle stripper & verb de-conjugator
 │   │   ├── korean_pipeline.js # Candidate generator orchestrator
 │   │   ├── dictionary_db.js   # IndexedDB engine for fast offline dictionary queries
-│   │   └── onnx_reranker.js   # KoELECTRA neural reranker module
+│   │   └── onnx_reranker.js   # Two-stage KoELECTRA + Multilingual E5 neural reranker module
 │   ├── offscreen/
 │   │   ├── offscreen.html     # Offscreen document HTML container
 │   │   └── offscreen.js       # Offscreen document host (Garu-ko WASM & ONNXRuntime-Web)
@@ -97,10 +103,10 @@ munmek/
 │       └── popup.css          # Popup CSS stylesheet
 ├── lib/
 │   ├── garu/                  # Garu-ko WASM binary & model files
-│   ├── models/                # Quantized KoELECTRA INT8 ONNX model & vocab.txt
+│   ├── models/                # KoELECTRA INT8 ONNX, Multilingual E5 INT8 ONNX & vocab
 │   ├── onnx/                  # ONNXRuntime-Web engine & WordPiece tokenizer
 │   └── jszip.min.js           # ZIP extraction library for termbank imports
-└── test/                      # Vitest automated test suite
+└── test/                      # Vitest automated test suite (33 passing unit tests)
 ```
 
 ---
@@ -120,6 +126,9 @@ npx vitest run
 The test suite validates:
 - Rule-based Hangul Jamo decomposition and irregular verb/adjective de-conjugations (`test/korean_lemmatizer.test.js`)
 - IndexedDB termbank storage & multi-dictionary priority queries (`test/dictionary_db.test.js`)
+- Local rule-based & Multilingual E5 homonym entry reordering & definition tab preselection (`test/koelectra_reranker.test.js`)
+- Two-stage neural candidate deinflection & multilingual dictionary sense tab ranking (`test/two_stage_neural_pipeline.test.js`)
+- Gemini definition matching and candidate scoping (`test/gemini_matcher.test.js`)
 - Background messaging and Anki template rendering (`test/background_template.test.js`)
 
 ---
@@ -131,7 +140,8 @@ Munmek is made possible thanks to the following open-source libraries, models, a
 | Technology / Resource | Author / Provider | License | Usage in Munmek |
 | :--- | :--- | :--- | :--- |
 | [Garu-ko](https://github.com/ongjin/garu) | phlummox | **MIT** | WebAssembly Korean morphological analyzer |
-| [KoELECTRA](https://github.com/monologg/KoELECTRA) | Park Jangwon (monologg) | **Apache 2.0** | INT8 ONNX candidate reranking neural model |
+| [KoELECTRA](https://github.com/monologg/KoELECTRA) | Park Jangwon (monologg) | **Apache 2.0** | Stage 1 candidate deinflection reranker neural model |
+| [Multilingual E5 Small](https://huggingface.co/intfloat/multilingual-e5-small) | Microsoft / Intfloat | **MIT** | Stage 2 cross-lingual dictionary sense tab neural model |
 | [ONNXRuntime-Web](https://github.com/microsoft/onnxruntime) | Microsoft | **MIT** | Local WebAssembly neural inference engine |
 | [JSZip](https://github.com/Stuk/jszip) | Stuart Knightley | **MIT / GPLv3** | ZIP archive unpacker for dictionary imports |
 | [Google Gemini API](https://ai.google.dev/) | Google DeepMind | **API ToS** | On-demand sentence & grammar analysis |

@@ -16,6 +16,12 @@ Thumbs.db
 coverage/
 .vitest/
 
-# Temp files
+# Temp files & Python build artifacts / Large ONNX models (>100MB GitHub limit)
 *.log
 scratch/
+__pycache__/
+*.pyc
+*fp32.onnx
+lib/models/multilingual_e5_small_int8.onnx
+
+

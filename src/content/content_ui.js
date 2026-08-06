@@ -217,26 +217,69 @@
     });
   }
 
-  function renderSingleEntryCard(entry, matchLabel, itemIndex = 0, state = null) {
+  function getConfidenceBadgeColors(confStr, isActiveTab) {
+    const num = parseInt(confStr || '85', 10);
+    if (num >= 85) {
+      return isActiveTab
+        ? { bg: '#2f5d62', color: '#ffffff', border: '#1e3e42' }
+        : { bg: '#e4f0ee', color: '#17383b', border: '#2f5d62' };
+    } else if (num >= 70) {
+      return isActiveTab
+        ? { bg: '#d97706', color: '#ffffff', border: '#b45309' }
+        : { bg: '#fef3c7', color: '#92400e', border: '#d97706' };
+    } else {
+      return isActiveTab
+        ? { bg: '#6b7280', color: '#ffffff', border: '#4b5563' }
+        : { bg: '#f3f4f6', color: '#374151', border: '#9ca3af' };
+    }
+  }
+
+  function renderSingleEntryCard(entry, matchLabel = '', itemIndex = 0, state = {}) {
     const rawDefinitions = Array.isArray(entry.definitions) ? entry.definitions : [];
     const definitions = splitEmbeddedDefinitions(rawDefinitions, entry.surface || entry.word || '');
+
+    const isCardMatched = Boolean(state.geminiMatchedItemIndex === itemIndex);
+    const matchedDefIdx = isCardMatched ? state.geminiMatchedDefIndex : null;
+    const hasGeminiMatch = typeof matchedDefIdx === 'number';
+
+    const isKoElectraMatched = Boolean(entry && entry._koelectraMatched);
+    const hasKoElectraMatch = isKoElectraMatched || (entry && Array.isArray(entry._defConfidenceScores) && entry._defConfidenceScores.length > 0);
+    const koelectraMatchedDefIdx = isKoElectraMatched ? (typeof entry._bestDefIndex === 'number' ? entry._bestDefIndex : 0) : 0;
+
+    const defConfScores = Array.isArray(entry._defConfidenceScores) ? entry._defConfidenceScores : [];
+
     const selectedIndexKey = `selectedDefIndex_${itemIndex}`;
-    const selectedIndex = (state && typeof state[selectedIndexKey] === 'number') ? state[selectedIndexKey] : 0;
+    let selectedIndex = 0;
+    if (state && typeof state[selectedIndexKey] === 'number') {
+      selectedIndex = state[selectedIndexKey];
+    } else if (hasGeminiMatch) {
+      selectedIndex = matchedDefIdx;
+    } else if (isKoElectraMatched) {
+      selectedIndex = koelectraMatchedDefIdx;
+    }
     const validIndex = (selectedIndex >= 0 && selectedIndex < definitions.length) ? selectedIndex : 0;
     const selectedDef = definitions[validIndex] || '';
 
-    const chips = [entry.pos, entry.type, matchLabel].filter(Boolean).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
+    const activeConfScore = defConfScores[validIndex] || entry._confidenceScore || '75%';
+    const bestConfScore = defConfScores[koelectraMatchedDefIdx] || entry._confidenceScore || '75%';
 
-    const isCardMatched = (state && typeof state.geminiMatchedItemIndex === 'number' && state.geminiMatchedItemIndex === itemIndex);
-    const matchedDefIdx = isCardMatched ? state.geminiMatchedDefIndex : null;
-    const hasGeminiMatch = typeof matchedDefIdx === 'number';
+    const chips = [entry.pos, entry.type, matchLabel].filter(Boolean).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
 
     let geminiBadgeHtml = '';
     if (hasGeminiMatch) {
       if (validIndex === matchedDefIdx) {
-        geminiBadgeHtml = `<span style="background: #2f5d62; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ Context Matched</span>`;
+        geminiBadgeHtml = `<span style="background: #2f5d62; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ Gemini Matched</span>`;
       } else {
-        geminiBadgeHtml = `<span style="background: #e4f0ee; color: #17383b; border: 1px solid #2f5d62; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ Context Matched (Def ${matchedDefIdx + 1})</span>`;
+        geminiBadgeHtml = `<span style="background: #e4f0ee; color: #17383b; border: 1px solid #2f5d62; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ Gemini Matched (Def ${matchedDefIdx + 1})</span>`;
+      }
+    } else if (hasKoElectraMatch) {
+      const isTopMatchedTab = validIndex === koelectraMatchedDefIdx;
+      const themeColors = getConfidenceBadgeColors(activeConfScore, isKoElectraMatched && isTopMatchedTab);
+      const prefix = isKoElectraMatched ? '✨ Context Matched' : '✨ Score';
+      if (isTopMatchedTab) {
+        geminiBadgeHtml = `<span style="background: ${themeColors.bg}; color: ${themeColors.color}; border: 1px solid ${themeColors.border}; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">${prefix} · ${activeConfScore}</span>`;
+      } else {
+        geminiBadgeHtml = `<span style="background: ${themeColors.bg}; color: ${themeColors.color}; border: 1px solid ${themeColors.border}; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">${prefix} (Def ${koelectraMatchedDefIdx + 1} · ${bestConfScore})</span>`;
       }
     }
 
@@ -244,14 +287,15 @@
       ? `<div class="def-tabs" style="display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; padding-bottom: 4px;">
           ${definitions.map((def, idx) => {
             const isActive = idx === validIndex;
-            const isMatchedTab = isCardMatched && (state.geminiMatchedDefIndex === idx);
-            const shortText = truncateText(stripHtml(def), 22);
-            return `<button type="button" class="def-tab" data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid ${isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4')}; background: ${isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff')}; color: ${isActive ? '#fff' : '#4f463a'};">Def ${idx + 1}: ${escapeHtml(shortText)}${isMatchedTab ? ' ✨' : ''}</button>`;
+            const isMatchedTab = (isCardMatched && state.geminiMatchedDefIndex === idx) || (isKoElectraMatched && koelectraMatchedDefIdx === idx);
+            const shortText = truncateText(stripHtml(def), 18);
+            const tabScoreStr = defConfScores[idx] ? ` (${defConfScores[idx]})` : '';
+            return `<button type="button" class="def-tab" data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid ${isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4')}; background: ${isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff')}; color: ${isActive ? '#fff' : '#4f463a'};">Def ${idx + 1}: ${escapeHtml(shortText)}${tabScoreStr}${isMatchedTab ? ' ✨' : ''}</button>`;
           }).join('')}
          </div>`
       : '';
 
-    const borderStyle = isCardMatched
+    const borderStyle = (isCardMatched || isKoElectraMatched)
       ? 'border-left: 6px solid #2f5d62; background: #f2faf8; border-color: #2f5d62;'
       : 'border-left: 4px solid #2f5d62; background: #faf7f2;';
 
@@ -314,7 +358,7 @@
   }
 
   function renderActions(state, hasCachedAnalysis) {
-    const aiLabel = hasCachedAnalysis ? 'Refresh Gemini' : 'Ask Gemini';
+    const aiLabel = hasCachedAnalysis ? '✨ Refresh Gemini' : '✨ Ask Gemini';
     return `
       <div class="section">
         <div class="actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
