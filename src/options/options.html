@@ -30,13 +30,23 @@
           </div>
         </div>
 
-        <label style="margin-top: 16px;">Fixed System Prompt (Enforces Full Sentence Analysis Schema)</label>
-        <div style="font-size: 0.84rem; background: #e8e3d9; padding: 12px; border-radius: 12px; border: 1px solid var(--line); font-family: monospace; white-space: pre-wrap; color: var(--ink); max-height: 140px; overflow-y: auto;">You are an expert Korean linguistic scholar and contextual analyzer.
-Analyze the Korean word '{WORD}' in the exact context of the sentence: '{SENTENCE}'.
-Preceding sentence: '{PREV_SENTENCE}'. Subsequent sentence: '{NEXT_SENTENCE}'.
+        <label style="margin-top: 16px;">Fixed System Prompt (Enforces Contextual Analysis Schema)</label>
+        <div style="font-size: 0.84rem; background: #e8e3d9; padding: 12px; border-radius: 12px; border: 1px solid var(--line); font-family: monospace; white-space: pre-wrap; color: var(--ink); max-height: 140px; overflow-y: auto;">Analyze the Korean word '{WORD}' in sentence: '{SENTENCE}'
+Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENCE2}'
 
-For EACH significant Korean word/phrase in '{SENTENCE}' (especially target '{WORD}'), provide a JSON object in the "words_analysis" array with: surface, base, pos, definitions (English), conjugation (ending & explanation), grammar_notes, id.
-Returns a single JSON object with key "words_analysis".</div>
+Rules:
+1. If '{WORD}' is a person's name or proper noun in context (e.g. before ~이에요/~예요/~야/~아/~씨/~님), set "pos": "proper noun" and definition to the name rather than forcing a dictionary homonym.
+2. Ground "grammar_notes" in the actual context of the surrounding sentences and scene.
+
+Return JSON with "words_analysis": [{
+  "surface": "{WORD}",
+  "base": "base form or name",
+  "pos": "part of speech",
+  "definitions": ["definition in context"],
+  "conjugation": { "ending": "...", "explanation": "..." },
+  "grammar_notes": "contextual breakdown based on scene/sentence context",
+  "id": "1"
+}]</div>
 
         <label for="aiPromptExtension" style="margin-top: 16px;">Additional User Prompt Instructions (Persona & Custom Rules)</label>
         <div class="hint">Appended to the system prompt. Add extra rules here (e.g. <code>Also append a Japanese translation to definitions</code> or <code>Add a "cultural_context" field</code>). Custom JSON fields added here automatically become available as Anki field mapping placeholders!</div>
