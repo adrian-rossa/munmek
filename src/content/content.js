@@ -444,10 +444,11 @@
             if (currentHoverState && currentHoverState.word === state.word) {
               let sortedHits = sortHitsByBaseForm(res.hits);
               try {
+                const fullContextText = [state.sentence, state.prevSentence, state.prevSentence2].filter(Boolean).join(' ');
                 if (typeof window.DictionaryReranker !== 'undefined' && typeof window.DictionaryReranker.rerankDictionaryEntries === 'function') {
-                  sortedHits = window.DictionaryReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
+                  sortedHits = window.DictionaryReranker.rerankDictionaryEntries(sortedHits, fullContextText, candidate.text);
                 } else if (typeof window.OnnxReranker !== 'undefined' && typeof window.OnnxReranker.rerankDictionaryEntries === 'function') {
-                  sortedHits = window.OnnxReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
+                  sortedHits = window.OnnxReranker.rerankDictionaryEntries(sortedHits, fullContextText, candidate.text);
                 }
               } catch (rerankErr) {
                 console.warn('[Munmek] Rerank fallback notice:', rerankErr);

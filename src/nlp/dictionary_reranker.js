@@ -27,7 +27,7 @@
       word: '배',
       senses: [
         { senseKey: 'pear', keywords: ['과일', '달다', '달콤', '나무', '먹다', '맛있', 'pear', 'fruit', 'sweet', 'tree', 'eat', '梨', 'なし', '果物', '甘い', '木', '食べる'], boost: 50 },
-        { senseKey: 'boat', keywords: ['바다', '강', '물', '항구', '선장', '타고', '타다', '항해', 'ship', 'boat', 'vessel', 'sea', 'river', 'water', 'sail', '船', '舟', 'ふね', '海', '川', '港', '乗る'], boost: 50 },
+        { senseKey: 'boat', keywords: ['바다', '강', '물', '항구', '선장', '타고', '타다', '항해', '타이태닉', '타이태닉호', '선박', '길이', '크기', '함선', '뱃길', 'ship', 'boat', 'vessel', 'sea', 'river', 'water', 'sail', 'titanic', 'craft', 'deck', 'hull', 'length', '船', '舟', 'ふね', '海', '川', '港', '乗る'], boost: 50 },
         { senseKey: 'belly', keywords: ['몸', '배고프', '배부르', '아프', '소화', 'belly', 'stomach', 'abdomen', 'body', 'hungry', '腹', 'お腹', 'はら', '体', '胃', '痛い'], boost: 50 },
         { senseKey: 'times', keywords: ['곱하기', '수', '증가', 'times', 'fold', 'double', 'triple', 'multiplication', '倍', 'ばい'], boost: 40 }
       ]
@@ -298,10 +298,20 @@
 
       // 3. Entry quality scoring: POS bonus & Cross-reference redirect penalty
       const isCrossRef = /^\([^)]*\)\s*→/.test(defText) || /→\s*[가-힣]+/.test(defText);
+      const posStr = String(entry.pos || '').toLowerCase();
+      const isAffix = posStr.includes('affix') || posStr.includes('suffix') || posStr.includes('prefix') || posStr.includes('접사') || posStr.includes('접미사') || posStr.includes('접두사');
+      const isExplicitAffixLookup = (targetWord && (targetWord.startsWith('-') || targetWord.endsWith('-'))) || (entry.surface && (entry.surface.startsWith('-') || entry.surface.endsWith('-')));
+
       if (isCrossRef) {
         defScore -= 40;
-      } else if (entry.pos && String(entry.pos).trim()) {
-        defScore += 10;
+      } else if (isAffix) {
+        if (!isExplicitAffixLookup) {
+          defScore -= 20;
+        }
+      } else if (posStr.includes('noun') || posStr.includes('verb') || posStr.includes('명사') || posStr.includes('동사')) {
+        defScore += 15;
+      } else if (posStr) {
+        defScore += 5;
       }
 
       defScores.push(defScore);
