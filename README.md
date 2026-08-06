@@ -47,7 +47,7 @@ Right-click the Munmek toolbar icon and select **Options** (or open `options.htm
 
 1. **Gemini Setup**: Paste your API key into the **API Key** field.
 2. **Import Dictionaries**:
-   - Download a Yomichan-format KRDICT `.zip` archive (e.g. `KRDICT-KO-EN.zip`).
+   - Download a Yomichan-format KRDICT `.zip` archive (e.g. `KRDICT-KO-EN.zip`). You can find compatible dictionaries [here](https://github.com/Lyroxide/yomitan-ko-dic/releases).
    - Click **Import Term Bank / Zip** and select the `.zip` file.
    - Adjust dictionary priority order using **▲ Up** and **▼ Down** buttons.
 3. **AnkiConnect Setup**:
