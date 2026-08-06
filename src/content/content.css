@@ -1,0 +1,175 @@
+/**
+ * Munmek Hover Tooltip Stylesheet
+ * Uses isolated CSS variables for absolute font size & scale across all websites.
+ */
+#munmek-tooltip.munmek-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  display: none;
+  font-size: var(--munmek-font-size, 15px) !important;
+  width: min(var(--munmek-tooltip-width, 460px), calc(100vw - 24px));
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid #ddd3c4;
+  border-radius: 18px;
+  background: #fffdf8;
+  color: #1e1b16;
+  box-shadow: 0 18px 55px rgba(23, 56, 59, 0.2);
+  font-family: Georgia, 'Times New Roman', serif;
+  line-height: 1.5;
+  user-select: text;
+  text-align: left;
+  letter-spacing: normal;
+  word-spacing: normal;
+}
+
+#munmek-tooltip.munmek-tooltip * {
+  box-sizing: border-box;
+}
+
+#munmek-tooltip .title {
+  font-size: 1.25em;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: #17383b;
+}
+
+#munmek-tooltip .subtitle {
+  color: #6c6458;
+  font-size: 0.9em;
+  margin-bottom: 10px;
+}
+
+#munmek-tooltip .section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #ece2d4;
+}
+
+#munmek-tooltip .section:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+#munmek-tooltip .label {
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7b7163;
+  margin-bottom: 6px;
+}
+
+#munmek-tooltip .sentence {
+  font-size: 0.92em;
+  color: #4f463a;
+  background: #f7f2ea;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+#munmek-tooltip .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#munmek-tooltip .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #e4f0ee;
+  color: #17383b;
+  font-size: 0.82em;
+  font-weight: 700;
+}
+
+#munmek-tooltip .entry-box {
+  border: 1px solid #eadfce;
+  border-radius: 14px;
+  padding: 12px;
+  background: #fff;
+}
+
+#munmek-tooltip .entry-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+#munmek-tooltip .entry-word {
+  font-size: 1.1em;
+  font-weight: 700;
+}
+
+#munmek-tooltip .entry-meta {
+  color: #6c6458;
+  font-size: 0.84em;
+}
+
+#munmek-tooltip ul {
+  margin: 8px 0 0 20px;
+  padding: 0;
+}
+
+#munmek-tooltip li {
+  margin: 4px 0;
+}
+
+#munmek-tooltip .actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+#munmek-tooltip button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 0.9em;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#munmek-tooltip .primary-button {
+  background: #2f5d62;
+  color: #fff;
+}
+
+#munmek-tooltip .secondary-button {
+  background: #e8e1d3;
+  color: #1e1b16;
+}
+
+#munmek-tooltip .feedback {
+  margin-top: 10px;
+  border-radius: 12px;
+  background: #f4f7f6;
+  padding: 10px 12px;
+  color: #35545c;
+  font-size: 0.88em;
+}
+
+#munmek-tooltip .feedback.error {
+  background: #fff0f0;
+  color: #9a1f1f;
+}
+
+#munmek-tooltip .muted {
+  color: #7b7163;
+}
+
+#munmek-tooltip .empty {
+  color: #6c6458;
+  font-style: italic;
+}

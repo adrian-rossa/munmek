@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Munmek Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>Munmek Settings</h1>
+      <p>Keep the lookup focused on Korean. Munmek reads a local packaged dictionary first, then can ask Gemini for richer grammar or translation help on demand, and can export cards to AnkiConnect.</p>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Gemini</h2>
+        <div class="inline-grid">
+          <div>
+            <label for="apiKey">API Key</label>
+            <input type="password" id="apiKey" placeholder="Enter your Gemini API key">
+          </div>
+          <div>
+            <label for="modelId">Model ID</label>
+            <input type="text" id="modelId" placeholder="gemini-2.0-flash-lite">
+          </div>
+        </div>
+
+        <label style="margin-top: 16px;">Fixed System Prompt (Enforces Full Sentence Analysis Schema)</label>
+        <div style="font-size: 0.84rem; background: #e8e3d9; padding: 12px; border-radius: 12px; border: 1px solid var(--line); font-family: monospace; white-space: pre-wrap; color: var(--ink); max-height: 140px; overflow-y: auto;">You are an expert Korean linguistic scholar and contextual analyzer.
+Analyze the Korean word '{WORD}' in the exact context of the sentence: '{SENTENCE}'.
+Preceding sentence: '{PREV_SENTENCE}'. Subsequent sentence: '{NEXT_SENTENCE}'.
+
+For EACH significant Korean word/phrase in '{SENTENCE}' (especially target '{WORD}'), provide a JSON object in the "words_analysis" array with: surface, base, pos, definitions (English), conjugation (ending & explanation), grammar_notes, id.
+Returns a single JSON object with key "words_analysis".</div>
+
+        <label for="aiPromptExtension" style="margin-top: 16px;">Additional User Prompt Instructions (Persona & Custom Rules)</label>
+        <div class="hint">Appended to the system prompt. Add extra rules here (e.g. <code>Also append a Japanese translation to definitions</code> or <code>Add a "cultural_context" field</code>). Custom JSON fields added here automatically become available as Anki field mapping placeholders!</div>
+        <textarea id="aiPromptExtension" placeholder="Add custom style constraints or instructions here..."></textarea>
+
+        <label for="responseLanguage" style="margin-top: 16px;">AI Response Language</label>
+        <div class="hint">Language for extension-wide AI responses (Ask Gemini and Quick LLM lookups). Injected into requests when a language other than English is selected.</div>
+        <select id="responseLanguage" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);">
+          <option value="English" selected>English (Default)</option>
+          <option value="German">German (Deutsch)</option>
+          <option value="Japanese">Japanese (日本語)</option>
+          <option value="Spanish">Spanish (Español)</option>
+          <option value="French">French (Français)</option>
+          <option value="Chinese">Chinese (中文)</option>
+          <option value="Korean">Korean (한국어)</option>
+          <option value="Custom">Custom Language...</option>
+        </select>
+        <div id="customLanguageContainer" style="display: none; margin-top: 8px;">
+          <input type="text" id="customResponseLanguage" placeholder="Specify language (e.g. Italian, Swedish, Portuguese...)" />
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Pipeline & Context Summarization</h2>
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
+          <input type="checkbox" id="enableOnnxReranker" style="width:auto;">
+          Enable ONNX Context Reranker for Homonym Disambiguation
+        </label>
+        <div class="hint" style="margin-bottom:14px;">Disambiguates homonym candidate lemmas (e.g. <code>들어요</code> → <code>듣다</code> vs. <code>들다</code>) based on sentence context using local KoELECTRA INT8 ONNX model inference.</div>
+
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
+          <input type="checkbox" id="useFullContext" style="width:auto;">
+          Use full page context for AI extraction (Higher token usage)
+        </label>
+        <div class="hint" style="margin-bottom:14px;">By default, extracted page/subtitle context is abbreviated (~3,000 input characters) before sending to Gemini to conserve API tokens. Enable this to send up to 8,000 input characters. <em>(Note: The character length in the popup indicates raw input context size, which is summarized into a concise topic sentence before analysis).</em></div>
+
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:8px;">
+          <input type="checkbox" id="enableCheaperSummaryModel" style="width:auto;">
+          Use a separate model for AI context summarization
+        </label>
+        <input type="text" id="cheaperSummaryModelId" placeholder="gemini-2.0-flash-lite" style="margin-top:4px;">
+        <div class="hint">Optionally specify a faster or cheaper model ID to summarize page context background.</div>
+      </section>
+
+      <section class="card">
+        <h2>Dictionary Management & Priority Order</h2>
+        <div class="hint">Upload Yomichan KO-EN / KO-JP term bank JSON files or `.zip` archives (e.g., <code>KRDICT-KO-EN.zip</code>) to store offline dictionaries in IndexedDB. Use the Move Up / Move Down controls below to set lookup priority order.</div>
+
+        <label for="selectedDictionaryId" style="margin-top: 14px;">Active Search Scope</label>
+        <select id="selectedDictionaryId" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);">
+          <option value="all">Search All Installed Dictionaries (by Priority Order)</option>
+        </select>
+
+        <div style="margin-top: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+          <input type="file" id="dictFileInput" accept=".json,.zip" multiple style="max-width: 320px;">
+          <button type="button" id="importDictBtn">Import Term Bank / Zip</button>
+          <button type="button" id="clearDictBtn" style="background:#8b261e;">Clear All Dictionaries</button>
+        </div>
+
+        <div id="dictStatus" class="hint" style="margin-top: 10px; font-weight: 700;">IndexedDB Word Count: Loading...</div>
+
+        <div id="dictListContainer" style="margin-top: 14px;"></div>
+      </section>
+
+      <section class="card">
+        <h2>Hover Trigger Settings</h2>
+        <label for="modifierKey">Activation Modifier Key</label>
+        <select id="modifierKey" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);">
+          <option value="Shift">Shift (Hold Shift key while hovering)</option>
+          <option value="Alt">Alt (Hold Alt / Option key while hovering)</option>
+          <option value="Control">Control (Hold Ctrl key while hovering)</option>
+          <option value="Meta">Meta (Hold Command / Windows key while hovering)</option>
+          <option value="None">None (Always scan on hover without holding key)</option>
+        </select>
+        <label for="tooltipFontSize" style="margin-top: 14px;">Tooltip Font Size & Scale</label>
+        <select id="tooltipFontSize" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);">
+          <option value="13">Compact / Small (13px)</option>
+          <option value="15" selected>Normal (15px — Default)</option>
+          <option value="18">Large (18px — Recommended for Netflix / Video overlays)</option>
+          <option value="21">Extra Large (21px)</option>
+          <option value="24">Huge (24px)</option>
+        </select>
+        <div class="hint">Adjust the font size and overall scale of the hover lookup tooltip across all websites. Useful for high-DPI screens or video subtitles on sites like Netflix.</div>
+      </section>
+
+      <section class="card">
+        <h2>AnkiConnect Integration</h2>
+        <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 14px;">
+          <div style="flex: 1;">
+            <label for="ankiConnectUrl">AnkiConnect URL</label>
+            <input type="text" id="ankiConnectUrl" placeholder="http://127.0.0.1:8765" style="width: 100%;">
+          </div>
+          <button type="button" id="testAnkiBtn" style="padding: 11px 16px;">Test Connection</button>
+        </div>
+
+        <div id="ankiStatus" style="font-weight: 700; margin-bottom: 14px; font-size: 0.9rem;"></div>
+
+        <div id="ankiConnectedControls" style="display: none; border-top: 1px dashed var(--line); padding-top: 14px; margin-top: 14px;">
+          <div class="inline-grid" style="margin-bottom: 14px;">
+            <div>
+              <label for="ankiDeckName">Target Deck</label>
+              <select id="ankiDeckName" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);"></select>
+            </div>
+            <div>
+              <label for="ankiNoteType">Note Type</label>
+              <select id="ankiNoteType" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);"></select>
+            </div>
+            <div>
+              <label for="ankiDefinitionField">Update Card Definition Field</label>
+              <select id="ankiDefinitionField" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);"></select>
+            </div>
+          </div>
+
+          <label style="font-weight: 700; margin-top: 10px; display: block;">Interactive Field Mapping</label>
+          <div class="hint">Assign Munmek values to your Anki note fields. Custom keys added via user prompt instructions above can also be mapped!</div>
+          <div id="ankiDynamicFieldsContainer" style="display: grid; gap: 10px; margin-top: 10px; background: #faf7f2; padding: 14px; border-radius: 14px; border: 1px solid var(--line);"></div>
+
+          <textarea id="ankiFieldMapping" spellcheck="false" style="display: none;"></textarea>
+
+        </div>
+      </section>
+    </div>
+
+    <div class="toolbar">
+      <button id="save">Save Settings</button>
+      <button id="reset" type="button" style="background:#6c6458;">Reset to Defaults</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <script src="../../lib/jszip.min.js"></script>
+  <script src="../nlp/dictionary_db.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,29 +1,43 @@
 {
   "manifest_version": 3,
-  "name": "Munmek - context based AI Word Lookup",
-  "version": "1.1",
-  "description": "Shows AI-powered definitions for hovered (Korean) words (Shift key) using context from the sentence or an uploaded subtitle file.",
-  "permissions": ["scripting", "activeTab", "storage"],
+  "name": "Munmek - Korean Context Lookup",
+  "version": "1.3.0",
+  "description": "Korean hover lookup with local dictionary ranking, optional Gemini explanations, and AnkiConnect exports.",
+  "author": "Adrian Rossa",
+  "homepage_url": "https://github.com/adrian-rossa/munmek#readme",
+  "permissions": ["storage", "offscreen"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background/background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"]
+      "css": ["src/content/content.css"],
+      "js": [
+        "src/nlp/korean_jamo.js",
+        "src/nlp/korean_lemmatizer.js",
+        "src/nlp/korean_pipeline.js",
+        "src/nlp/dictionary_reranker.js",
+        "src/nlp/onnx_reranker.js",
+        "src/nlp/dictionary_db.js",
+        "src/content/content_ui.js",
+        "src/content/content.js"
+      ]
     }
   ],
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "assets/icon16.png",
       "48": "assets/icon48.png",
       "128": "assets/icon128.png"
     }
   },
-  "options_page": "options.html",
+  "options_page": "src/options/options.html",
   "host_permissions": [
-    "https://generativelanguage.googleapis.com/"
+    "https://generativelanguage.googleapis.com/*",
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*"
   ],
   "icons": {
     "16": "assets/icon16.png",
@@ -32,7 +46,15 @@
   },
   "web_accessible_resources": [
     {
-      "resources": [],
+      "resources": [
+        "src/content/content.css",
+        "korean_words.json",
+        "src/offscreen/offscreen.html",
+        "src/offscreen/offscreen.js",
+        "lib/garu/*",
+        "lib/onnx/*",
+        "lib/models/*"
+      ],
       "matches": ["<all_urls>"]
     }
   ]

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Munmek Context & Settings</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="panel">
+    <div class="header">
+      <h1>Munmek Context</h1>
+      <button id="open-settings" class="secondary" style="padding: 4px 10px; font-size: 0.78rem;">⚙ Settings</button>
+    </div>
+
+    <div class="toggle-card">
+      <div class="toggle-info">
+        <div class="toggle-title">Extension Hover & Popup</div>
+        <div class="toggle-subtitle" id="toggleStateLabel">Enabled</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="extensionToggleCheck" checked>
+        <span class="slider round"></span>
+      </label>
+    </div>
+
+    <div class="section-title">Active Tab AI Context</div>
+    <div id="contextStatus" class="status-card">Checking active tab context...</div>
+
+    <div class="btn-group">
+      <button id="extractPageBtn">
+        📄 Extract Page / Subtitles Context
+      </button>
+
+      <input type="file" id="contextFileInput" accept=".txt,.srt">
+      <button id="uploadFileBtn" class="secondary">
+        📁 Upload Context File (.txt, .srt)
+      </button>
+
+      <button id="clearContextBtn" class="danger" style="display:none;">
+        🗑 Clear Tab Context
+      </button>
+    </div>
+
+    <div class="hint">
+      Context is attached to Gemini requests on the active tab to provide deep context-aware translations and grammar notes.
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

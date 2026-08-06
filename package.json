@@ -1,0 +1,37 @@
+{
+  "name": "munmek",
+  "version": "1.3.0",
+  "description": "Munmek (문맥) - Fast, context-aware Korean hover-lookup browser extension with local termbanks, KoELECTRA ONNX neural reranking, optional Gemini Flash explanations, and AnkiConnect card creation.",
+  "main": "background.js",
+  "scripts": {
+    "test": "npx vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adrian-rossa/munmek.git"
+  },
+  "keywords": [
+    "korean",
+    "language-learning",
+    "chrome-extension",
+    "ankiconnect",
+    "yomichan",
+    "gemini",
+    "onnx"
+  ],
+  "author": "Adrian Rossa",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/adrian-rossa/munmek/issues"
+  },
+  "homepage": "https://github.com/adrian-rossa/munmek#readme",
+  "dependencies": {
+    "garu-ko": "^0.9.12",
+    "jszip": "^3.10.1",
+    "onnxruntime-web": "^1.27.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0",
+    "vitest": "^3.0.0"
+  }
+}
