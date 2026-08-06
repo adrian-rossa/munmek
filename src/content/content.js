@@ -519,7 +519,9 @@
         }
 
         if (currentHoverState && currentHoverState.word === state.word && (!currentHoverState.dictionaryEntries || currentHoverState.dictionaryEntries.length === 0)) {
-          currentHoverState.lookupReason = 'No offline dictionary match found. Select a candidate chip for Quick LLM Lookup.';
+          currentHoverState.lookupReason = 'No offline dictionary match found. Running Quick LLM Lookup...';
+          rerenderCurrentTooltip();
+          triggerQuickGeminiFallback(currentHoverState);
         }
       } catch (err) {
         console.warn('[Munmek] IndexedDB lookup notice:', err);
@@ -740,8 +742,22 @@
         },
         (res) => {
           pendingQuickFallbacks.delete(state.word);
+          if (chrome.runtime.lastError || !res || res.error) {
+            if (currentHoverState && currentHoverState.word === state.word) {
+              let errMsg = res?.error || chrome.runtime.lastError?.message || 'Quick LLM Lookup failed.';
+              if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+                errMsg = 'Gemini API Rate Limit Reached (HTTP 429). Please wait a few seconds.';
+              }
+              currentHoverState.lookupReason = 'Quick LLM Lookup Failed';
+              currentHoverState.feedback = errMsg;
+              currentHoverState.feedbackType = 'error';
+              rerenderCurrentTooltip();
+            }
+            return;
+          }
           if (res && res.data && currentHoverState && currentHoverState.word === state.word) {
             currentHoverState.quickFallback = res.data;
+            currentHoverState.lookupReason = `Quick LLM Lookup (${res.data.pos || 'LLM'})`;
             rerenderCurrentTooltip();
           }
         }

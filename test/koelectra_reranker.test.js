@@ -144,4 +144,23 @@ describe('KoELECTRA Homonym Dictionary Entry Reranker', () => {
     expect(reranked[0]._koelectraMatched).toBe(true);
     expect(reranked[0]._bestDefIndex).toBe(3); // Index 3 = Def 4 ("sing")
   });
+
+  it('ranks real Bound Noun definition above cross-reference redirect entry for "거"', () => {
+    const geoeEntries = [
+      {
+        surface: '거',
+        pos: '',
+        definitions: ['(거는데, 거니, 건, 거는, 걸, 겁니다)→ 걸다 1, 걸다 2']
+      },
+      {
+        surface: '거',
+        pos: 'Bound Noun',
+        definitions: ['thing A bound noun used to refer to a certain thing or phenomenon, or fact.']
+      }
+    ];
+
+    const reranked = OnnxReranker.rerankDictionaryEntries(geoeEntries, '갈 거예요.', '거예요');
+    expect(reranked[0].pos).toBe('Bound Noun');
+    expect(reranked[0].definitions[0]).toContain('thing');
+  });
 });

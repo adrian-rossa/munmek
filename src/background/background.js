@@ -10,7 +10,7 @@ function ensureDictionaryDbLoaded() {
 }
 ensureDictionaryDbLoaded();
 
-const DEFAULT_MODEL_ID = 'gemini-2.0-flash-lite';
+const DEFAULT_MODEL_ID = 'gemini-flash-lite-latest';
 const DEFAULT_PROMPT = `Analyze the Korean word '{WORD}' in sentence: '{SENTENCE}'
 Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENCE2}'
 

@@ -296,8 +296,16 @@
         });
       }
 
+      // 3. Entry quality scoring: POS bonus & Cross-reference redirect penalty
+      const isCrossRef = /^\([^)]*\)\s*→/.test(defText) || /→\s*[가-힣]+/.test(defText);
+      if (isCrossRef) {
+        defScore -= 40;
+      } else if (entry.pos && String(entry.pos).trim()) {
+        defScore += 10;
+      }
+
       defScores.push(defScore);
-      const confNum = Math.min(99, Math.max(62, 65 + Math.round((defScore / 100) * 34)));
+      const confNum = Math.min(99, Math.max(62, 65 + Math.round((Math.max(0, defScore) / 100) * 34)));
       defConfidenceScores.push(`${confNum}%`);
 
       if (defScore > bestDefScore) {
@@ -306,7 +314,7 @@
       }
     });
 
-    totalScore = Math.max(0, bestDefScore);
+    totalScore = bestDefScore;
     return { totalScore, bestDefIndex, defScores, defConfidenceScores };
   }
 

@@ -184,7 +184,9 @@
 
       cleaned = cleaned.replace(/^[\d]+[\.\)]\s*/, '').trim();
 
-      if (/^\([^)]*(어|아|어서|아서|으니|으면|은)[^)]*\)$/.test(cleaned)) {
+      if (/^\([^)]+\)\s*→\s*.+/.test(cleaned)) {
+        cleaned = `Conjugation variant: ${cleaned}`;
+      } else if (/^\([^)]*(어|아|어서|아서|으니|으면|은)[^)]*\)/.test(cleaned)) {
         cleaned = `Conjugations: ${cleaned}`;
       }
 
@@ -312,11 +314,14 @@
          </div>`
       : '<div class="section empty">No definition text available.</div>';
 
+    const showEntryWordHeader = Boolean(
+      (entry.surface && entry.surface !== state.word) ||
+      (entry.base && entry.base !== entry.surface)
+    );
+
     return `
       <div class="section entry-box" style="${borderStyle} padding-left: 12px; border-radius: 8px; border: 1px solid #eadfce; margin-bottom: 8px;">
-        <div class="entry-head">
-          <div class="entry-word" style="font-weight: 700;">${escapeHtml(entry.surface || '')}${entry.base && entry.base !== entry.surface ? ` <span class="muted">(${escapeHtml(entry.base)})</span>` : ''}</div>
-        </div>
+        ${showEntryWordHeader ? `<div class="entry-head"><div class="entry-word" style="font-weight: 700;">${escapeHtml(entry.surface || '')}${entry.base && entry.base !== entry.surface ? ` <span class="muted">(${escapeHtml(entry.base)})</span>` : ''}</div></div>` : ''}
         ${chips ? `<div class="chips" style="margin-top: 4px; margin-bottom: 6px;">${chips}</div>` : ''}
         ${definitionBoxHtml}
         ${entry.hanja ? `<div class="section"><div class="label">Hanja</div><div>${escapeHtml(entry.hanja)}</div></div>` : ''}
