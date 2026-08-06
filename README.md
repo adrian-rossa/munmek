@@ -1,11 +1,11 @@
 # Munmek (문맥) — Korean Context Lookup
 
-**Munmek** is a Chromium browser extension for fast, optionally context-aware Korean word lookups. It combines a local offline termbank engine (supporting Yomichan / KRDICT imports), a hybrid morphological analyzer, neural KoELECTRA candidate reranking, optional Google Gemini explanations for context-aware definitions and explanations, ASBPlayer subtitle support, and interactive AnkiConnect flashcard exports.
-This extension aims to solve the ambiguity that makes Korean so difficult for beginners.
+**Munmek** is a Chromium browser extension for fast, context-aware Korean word lookups. It aims to solve language ambiguity that makes Korean difficult for beginners. This is done by combining a local offline termbank engine (supporting Yomichan / KRDICT imports), a hybrid morphological analyzer (Garu-ko), neural KoELECTRA candidate reranking, a Multilingual E5 model for reranking definition results and optional Google Gemini explanations for further context-aware definitions and explanations. This extension also features ASBPlayer subtitle support, and interactive AnkiConnect flashcard exports.
 
 In its current vibe coded state this extension serves as a **proof of concept**. I will rework it from scratch for better maintainability and stability if I feel like demand is there and it proves useful.
 Meanwhile [Kimchi Reader](https://kimchi-reader.app/) or [Migaku](https://migaku.com/) are more polished and actively maintained paid alternatives with a similar featureset.
 Credits for the amazing [blog post](https://kimchi-reader.app/blog/int8-cpu-korean-disambiguation) regarding the KoELECTRA INT8 Reranker go to Kimchi Readers developer @Alanoor.
+
 ---
 
 ## Key Features
@@ -30,7 +30,7 @@ Credits for the amazing [blog post](https://kimchi-reader.app/blog/int8-cpu-kore
 ### 1. Prerequisites
 - **Browser**: Google Chrome, Brave, Microsoft Edge, or any Chromium-based browser.
 - **Anki Desktop** *(Optional, for card export)*: Anki installed with the [AnkiConnect Add-on](https://ankiweb.net/shared/info/2055492159) (Add-on Code: `2055492159`).
-- **Gemini API Key** *(Optional, for AI explanations)*: Get a free key from [Google AI Studio](https://aistudio.google.com/apikey).
+- **Gemini API Key** *(Optional, for AI explanations)*: Get a free key from [Google AI Studio](https://aistudio.google.com/apikey) and set the models name in the extension settings. I recommend using a flash-lite model for speed and low cost. You can also set 'gemini-flash-lite-latest' to automatically get routed to the current model but slightly older models are usually the cheaper option. The extension is designed with token usage in mind, so the Gemini free tier should be sufficient for moderate usage.
 
 ### 2. Installing the Extension
 1. Clone or download this repository:
@@ -60,8 +60,8 @@ Right-click the Munmek toolbar icon and select **Options** (or open `options.htm
 ## Usage Guide
 
 - **Hover Lookup**: Hold `Shift` (or your chosen modifier key) and move your mouse over any Korean word on a webpage or ASBPlayer video overlay.
-- **Switch Candidates**: Click candidate chips (e.g. `[듣다]`, `[들다]`) in the tooltip to view alternative base form definitions.
-- **Ask Gemini**: Click **Ask Gemini** inside the popup to generate structural grammar breakdowns and context notes for the sentence.
+- **Switch Candidates**: Click candidate chips (e.g. `[듣다]`, `[들다]`) in the tooltip to view alternative base form definitions. In case there is no local definition available clicking the candidate chip will trigger a quick LLM lookup for a definition.
+- **Ask Gemini**: Click **Ask Gemini** inside the popup to generate more detailed and context-aware definitions, structural grammar breakdowns and context notes for the sentence.
 - **Export Flashcard**: Click **Send to Anki** or `+ Anki` on a specific definition tab to add or update your card.
 - **Extract Context**: Click the Munmek toolbar icon to summarize page text or video subtitles for background AI context.
 
