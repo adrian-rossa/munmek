@@ -26,10 +26,40 @@
     return tooltip;
   }
 
+  function getGeminiAnalysisForState(state, cache) {
+    if (!state || !cache) return null;
+    const sentenceKey = state.sentenceKey || '';
+    const wordKey = cleanKoreanWord(state.word || '');
+    const matchKey = cleanKoreanWord(state.dictionaryMatch || '');
+
+    if (wordKey && cache.has(`${wordKey}__${sentenceKey}`)) {
+      return cache.get(`${wordKey}__${sentenceKey}`);
+    }
+    if (matchKey && cache.has(`${matchKey}__${sentenceKey}`)) {
+      return cache.get(`${matchKey}__${sentenceKey}`);
+    }
+
+    const sentenceCached = cache.get(sentenceKey);
+    if (sentenceCached) {
+      const wordsAnalysis = Array.isArray(sentenceCached.words_analysis)
+        ? sentenceCached.words_analysis
+        : (Array.isArray(sentenceCached.words) ? sentenceCached.words : (Array.isArray(sentenceCached.analysis) ? sentenceCached.analysis : null));
+      if (Array.isArray(wordsAnalysis) && wordsAnalysis.length > 0) {
+        const item = wordsAnalysis.find((w) => {
+          const s = cleanKoreanWord(w.surface || w.word || '');
+          const b = cleanKoreanWord(w.base || '');
+          return (s && (s === wordKey || s === matchKey)) || (b && (b === wordKey || b === matchKey));
+        });
+        if (item) return sentenceCached;
+      }
+    }
+    return null;
+  }
+
   function renderTooltip(state, sentenceAnalysisCache, onMouseEnter, onMouseLeave, onClick) {
     ensureTooltip(onMouseEnter, onMouseLeave, onClick);
 
-    const analysis = sentenceAnalysisCache.get(state.sentenceKey) || null;
+    const analysis = getGeminiAnalysisForState(state, sentenceAnalysisCache);
     if (analysis || state.quickFallback) {
       autoSelectBestDefinitionFromGemini(state, analysis || state.quickFallback);
     }
@@ -59,8 +89,11 @@
          </div>`
       : '';
 
+    const iconUrl = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL('assets/icon32.png') : '';
+    const iconHtml = iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="Munmek" style="width: 24px; height: 24px; margin-right: 8px; vertical-align: middle; display: inline-block; object-fit: contain;">` : '';
+
     const html = [
-      `<div class="title">${escapeHtml(state.word || '...')}</div>`,
+      `<div class="title" style="display: flex; align-items: center; gap: 6px;">${iconHtml}<span>${escapeHtml(state.word || '...')}</span></div>`,
       dictHtml,
       candidateChipsHtml,
       state.sentence ? `<div class="subtitle">${escapeHtml(truncateText(state.sentence, 180))}</div>` : '',
@@ -420,17 +453,18 @@
 
     if (wordsAnalysis && wordsAnalysis.length > 0) {
       const currentWord = cleanKoreanWord(currentHoverState ? currentHoverState.word : '');
+      const currentMatch = cleanKoreanWord(currentHoverState ? (currentHoverState.dictionaryMatch || currentHoverState.word) : '');
       let targetItem = wordsAnalysis.find((item) => {
         const s = cleanKoreanWord(item.surface || item.word || '');
         const b = cleanKoreanWord(item.base || '');
         if (!s && !b) return false;
-        if (s === currentWord || b === currentWord) return true;
-        if (currentWord.startsWith(s) || s.startsWith(currentWord)) return true;
-        return currentWord.includes(s) || s.includes(currentWord);
+        if (s === currentWord || b === currentWord || s === currentMatch || b === currentMatch) return true;
+        if (currentWord.startsWith(s) || s.startsWith(currentWord) || currentMatch.startsWith(s) || s.startsWith(currentMatch)) return true;
+        return currentWord.includes(s) || s.includes(currentWord) || currentMatch.includes(s) || s.includes(currentMatch);
       });
 
       if (!targetItem) {
-        return `<div class="section empty" style="font-size:0.86em;">Sentence breakdown cached (${wordsAnalysis.length} words), but no entry matching "${escapeHtml(currentWord)}" was returned.</div>`;
+        return '<div class="section empty">Ask Gemini for a richer, context-aware explanation.</div>';
       }
 
       const surface = targetItem.surface || targetItem.word || '';
@@ -502,9 +536,20 @@
     }
 
     const normalized = normalizeGeminiAnalysis(rawAnalysis);
-    if (!normalized) {
+    if (!normalized || (!normalized.translation && !normalized.grammar && !normalized.notes && !normalized.hanja)) {
       return '<div class="section empty">No structural breakdown returned.</div>';
     }
+
+    return `
+      <div class="section entry-box" style="border: 1px solid #2f5d62; background: #f4faf9; margin-top: 10px; border-radius: 8px; padding: 10px 12px;">
+        <div style="font-weight: 700; color: #17383b; font-size: 0.96em; margin-bottom: 6px;">
+          Gemini Contextual Analysis
+        </div>
+        ${normalized.translation ? `<div style="font-size: 0.9em; color: #1e1b16; margin-bottom: 4px;"><strong>Translation/Def:</strong> ${escapeHtml(normalized.translation)}</div>` : ''}
+        ${normalized.grammar ? `<div style="font-size: 0.84em; color: #17383b; background: #e4f0ee; padding: 6px 10px; border-radius: 8px; margin-top: 4px;"><strong>Grammar:</strong> ${escapeHtml(normalized.grammar)}</div>` : ''}
+        ${normalized.notes ? `<div style="font-size: 0.84em; color: #4f463a; font-style: italic; background: #fff; padding: 6px 10px; border-radius: 8px; border: 1px solid #eadfce; margin-top: 4px;"><strong>Note:</strong> ${escapeHtml(normalized.notes)}</div>` : ''}
+      </div>
+    `;
   }
 
   function autoSelectBestDefinitionFromGemini(state, analysisData) {
@@ -531,11 +576,12 @@
 
       if (Array.isArray(wordsAnalysis) && wordsAnalysis.length > 0) {
         const cleanW = cleanKoreanWord(state.word || '');
+        const cleanM = cleanKoreanWord(state.dictionaryMatch || '');
         const targetItem = wordsAnalysis.find((item) => {
           const s = cleanKoreanWord(item.surface || item.word || '');
           const b = cleanKoreanWord(item.base || '');
-          return (s && (s === cleanW || cleanW.startsWith(s))) || (b && b === cleanW);
-        }) || wordsAnalysis[0];
+          return (s && (s === cleanW || s === cleanM || cleanW.startsWith(s))) || (b && (b === cleanW || b === cleanM));
+        });
 
         if (targetItem) {
           if (targetItem.pos) geminiPos = String(targetItem.pos).toLowerCase();

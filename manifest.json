@@ -47,6 +47,7 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "assets/*",
         "src/content/content.css",
         "korean_words.json",
         "src/offscreen/offscreen.html",

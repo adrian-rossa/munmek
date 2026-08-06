@@ -683,7 +683,7 @@
     }
 
     if (action === 'analyze') {
-      requestSentenceAnalysis(currentHoverState);
+      requestSentenceAnalysis(currentHoverState, null, true);
     }
 
     if (action === 'anki' || action === 'anki-dict') {
@@ -765,8 +765,13 @@
     }
   }
 
-  function requestSentenceAnalysis(state, onSuccess = null) {
-    if (sentenceAnalysisCache.has(state.sentenceKey) && !pendingAnalysisRequests.has(state.sentenceKey)) {
+  function requestSentenceAnalysis(state, onSuccess = null, forceRefresh = false) {
+    if (!state) return;
+    if (forceRefresh && state.sentenceKey) {
+      sentenceAnalysisCache.delete(state.sentenceKey);
+    }
+
+    if (!forceRefresh && sentenceAnalysisCache.has(state.sentenceKey) && !pendingAnalysisRequests.has(state.sentenceKey)) {
       const cached = sentenceAnalysisCache.get(state.sentenceKey);
       autoSelectBestDefinitionFromGemini(state, cached);
       currentHoverState.feedback = 'Using cached Gemini analysis for this sentence.';
@@ -824,6 +829,8 @@
         }
 
         sentenceAnalysisCache.set(state.sentenceKey, response.data);
+        const wordKey = normalizeText(state.word || '');
+        if (wordKey) sentenceAnalysisCache.set(`${wordKey}__${state.sentenceKey}`, response.data);
         autoSelectBestDefinitionFromGemini(state, response.data);
         currentHoverState.feedback = 'Gemini analysis ready.';
         currentHoverState.feedbackType = 'info';
@@ -892,6 +899,7 @@
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       if (window.MunmekUI) window.MunmekUI.hideTooltip();
+      lastHoverSignature = '';
     }, HIDE_DELAY_MS);
   }
 
