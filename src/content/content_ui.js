@@ -616,7 +616,10 @@
 
         if (targetItem) {
           if (targetItem.pos) geminiPos = String(targetItem.pos).toLowerCase();
-          if (targetItem.base) geminiBase = cleanKoreanWord(targetItem.base);
+          if (targetItem.base) {
+            geminiBase = cleanKoreanWord(targetItem.base);
+            state.geminiMatchedBase = geminiBase;
+          }
           if (Array.isArray(targetItem.definitions)) meaningFragments.push(...targetItem.definitions.map(String));
           if (targetItem.definition) meaningFragments.push(String(targetItem.definition));
           if (targetItem.meaning) meaningFragments.push(String(targetItem.meaning));

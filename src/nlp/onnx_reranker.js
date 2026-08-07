@@ -1079,8 +1079,19 @@
 
           const rawSims = [];
           for (const defText of passages) {
-            if (entry._defVectors && entry._defVectors[defText]) {
-              const inlineVec = entry._defVectors[defText];
+            let inlineVec = null;
+            if (entry._defVectors) {
+              if (entry._defVectors[defText]) {
+                inlineVec = entry._defVectors[defText];
+              } else {
+                const cleanKey = defText.toLowerCase().trim();
+                const keys = Object.keys(entry._defVectors);
+                const matchedKey = keys.find(k => k === defText || k.toLowerCase().trim() === cleanKey || defText.includes(k) || k.includes(defText));
+                if (matchedKey) inlineVec = entry._defVectors[matchedKey];
+              }
+            }
+
+            if (inlineVec) {
               rawSims.push(inlineVec instanceof Int8Array ? dotProductInt8(queryEmbedding, inlineVec) : dotProduct(queryEmbedding, inlineVec));
               continue;
             }

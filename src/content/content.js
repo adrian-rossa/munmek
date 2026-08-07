@@ -309,6 +309,9 @@
     const word = textContent.slice(start, end).trim();
     if (!word) return null;
 
+    const KOREAN_CHAR_REGEX = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/u;
+    if (!KOREAN_CHAR_REGEX.test(word)) return null;
+
     // Detect ASBPlayer subtitle context via closest() — simple and reliable
     const asbplayerContainer = node.parentElement
       ? node.parentElement.closest('[class*="asbplayer-subtitles"]')
@@ -1006,6 +1009,45 @@
         clearTimeout(rerankDebounceTimer);
         rerankDebounceTimer = null;
       }
+
+      if (state.geminiMatchedBase && state.geminiMatchedBase !== state.dictionaryMatch) {
+        const targetCand = state.geminiMatchedBase;
+        const matchingCand = (state.candidateList || []).find(c => c.text === targetCand || c.stem === targetCand);
+        if (matchingCand) {
+          switchCandidateForm(state, matchingCand.text);
+        }
+      }
+    }
+  }
+
+  function switchCandidateForm(state, selectedCandidate) {
+    if (!state || state.dictionaryMatch === selectedCandidate) return;
+    state.dictionaryMatch = selectedCandidate;
+    state.word = selectedCandidate;
+    state.selectedDefinitionIndex = 0;
+    state.selectedGroupIndex = 0;
+    state.userSelectedDef = false;
+    delete state.selectedDefIndex_0;
+
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({
+        type: 'dictionaryLookup',
+        method: 'lookupSurface',
+        text: selectedCandidate,
+        dictId: currentSelectedDictionaryId
+      }, (res) => {
+        if (res && res.hits && res.hits.length > 0 && state) {
+          let sortedHits = sortHitsByBaseForm(res.hits);
+          state.dictionaryEntries = sortedHits;
+          state.dictionaryEntry = sortedHits[0];
+          state.lookupReason = `Gemini Matched (${res.hits[0].dictTitle || 'Local'})`;
+          const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey);
+          if (cachedAnalysis && window.MunmekUI) {
+            window.MunmekUI.autoSelectBestDefinitionFromGemini(state, cachedAnalysis);
+          }
+          rerenderCurrentTooltip();
+        }
+      });
     }
   }
 

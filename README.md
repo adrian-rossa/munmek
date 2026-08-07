@@ -55,6 +55,31 @@ Right-click the Munmek toolbar icon and select **Options** (or open `options.htm
    - Click **Test Connection**.
    - Select your target **Deck**, **Note Type**, and map Munmek placeholders (`{{word}}`, `{{base}}`, `{{definition}}`, `{{sentence}}`, etc.) to your note fields.
 
+<details>
+<summary>⚡ <strong>Offline Vector Precomputation Guide (GPU Accelerated)</strong></summary>
+
+Precomputing definition vectors locally using your computer's GPU speeds up sense reranking for offline lookups down to **<5ms**, completely bypassing live ONNX model evaluation (works for both WASM CPU and WebGPU settings).
+
+### Step-by-Step Instructions:
+
+1. **Install Python dependencies**:
+   ```bash
+   pip install -r scripts/requirements.txt
+   ```
+2. **Run GPU Precomputation**:
+   Run the precomputation script passing your Yomichan dictionary `.zip` file:
+   ```bash
+   python scripts/precompute_definition_vectors.py "path/to/KRDICT-KO-EN.zip"
+   ```
+   *(Uses DirectML GPU hardware acceleration to process 200k+ definitions in seconds)*
+
+3. **Import Vector Cache into Extension**:
+   - The script outputs a compact binary file `[dict_name]_vectors.vec.bin` in `scripts/` (~79 MB).
+   - In **Munmek Settings**, click **"📥 Import Vector File"** next to your installed dictionary and select the `.vec.bin` file.
+   - The badge **"⚡ Vector Cached"** will appear! Offline lookups will now perform sense reranking instantly (<5ms).
+
+</details>
+
 ---
 
 ## Usage Guide
@@ -76,7 +101,9 @@ munmek/
 ├── README.md                  # Project documentation & setup guide
 ├── scripts/
 │   ├── export_koelectra_onnx.py  # Export PyTorch KoELECTRA to INT8 ONNX
-│   └── export_multilingual_onnx.py # Export PyTorch Multilingual-E5 to INT8 ONNX
+│   ├── export_multilingual_onnx.py # Export PyTorch Multilingual-E5 to INT8 ONNX
+│   ├── precompute_definition_vectors.py # DirectML GPU offline definition vector precomputator
+│   └── requirements.txt          # Python dependencies for GPU vector precomputation
 ├── src/
 │   ├── background/
 │   │   └── background.js      # Service Worker (Offscreen lifecycle, Gemini API, AnkiConnect)

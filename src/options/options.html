@@ -112,6 +112,22 @@ Return JSON with "words_analysis": [{
           <button type="button" id="clearDictBtn" style="background:#8b261e;">Clear All Dictionaries</button>
         </div>
 
+        <div id="vectorImportExplanation" class="hint" style="margin-top: 12px; padding: 12px 14px; background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 12px; color: #1e40af;">
+          ⚡ <strong>Precomputed Vector Cache (.vec.bin / .json)</strong>: Precomputing vectors using GPU hardware accelerates sense reranking for offline lookups (<5ms). Use the step-by-step guide below to generate compact vector cache files in seconds.
+        </div>
+
+        <details style="margin-top: 10px; background: #faf8f5; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;">
+          <summary style="font-weight: 700; cursor: pointer; color: #2563eb;">📖 Step-by-Step Guide: GPU Vector Precomputation</summary>
+          <div style="margin-top: 10px; font-size: 0.88rem; line-height: 1.5; color: var(--ink);">
+            <ol style="margin-left: 18px; display: grid; gap: 8px;">
+              <li><strong>Install Dependencies</strong>: Open a terminal in the project directory and run:<br><code>pip install -r scripts/requirements.txt</code></li>
+              <li><strong>Run GPU Precomputation</strong>: Execute the script passing your dictionary zip file:<br><code>python scripts/precompute_definition_vectors.py "path/to/dictionary.zip"</code></li>
+              <li><strong>Import Vector Cache File</strong>: The script outputs <code>[dict_name]_vectors.vec.bin</code> in <code>scripts/</code> (~79 MB). Click <strong>"📥 Import Vector File"</strong> next to your installed dictionary below and pick the <code>.vec.bin</code> file!</li>
+            </ol>
+            <div style="margin-top: 8px; font-size: 0.82rem; color: var(--muted);">⚡ <em>Precomputed vectors work for both WASM CPU and WebGPU settings, bypassing live ONNX model evaluation for instant lookups (<5ms).</em></div>
+          </div>
+        </details>
+
         <div id="dictStatus" class="hint" style="margin-top: 10px; font-weight: 700;">IndexedDB Word Count: Loading...</div>
 
         <div id="dictListContainer" style="margin-top: 14px;"></div>

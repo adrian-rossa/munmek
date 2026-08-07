@@ -92,18 +92,38 @@ document.addEventListener('DOMContentLoaded', () => {
       if (d.id === currentSelected) opt.selected = true;
       selectedDictionaryIdInput.appendChild(opt);
 
+      let vectorControlsHtml = '';
+      if (d.hasPrecomputedVectors) {
+        vectorControlsHtml = `
+          <div style="margin-top:6px; display:flex; align-items:center; gap:8px;">
+            <span class="chip" style="background:#e6f4ea; color:#137333; font-weight:700;">⚡ Vector Cached</span>
+            <button type="button" class="remove-vector-btn" data-id="${escapeHtml(d.id)}" style="background:#8b261e; font-size:0.8rem; padding:4px 8px;">Remove Vectors</button>
+          </div>
+        `;
+      } else {
+        vectorControlsHtml = `
+          <div style="margin-top:6px; display:flex; align-items:center; gap:8px;">
+            <button type="button" class="import-vector-btn" data-id="${escapeHtml(d.id)}" style="background:#2563eb; font-size:0.8rem; padding:4px 10px;">📥 Import Vector File (.vec.bin / .json)</button>
+            <input type="file" class="vector-file-input" data-id="${escapeHtml(d.id)}" accept=".json,.bin,.vec.bin" style="display:none;">
+          </div>
+        `;
+      }
+
       listHtml += `
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#fff; padding:10px 14px; border-radius:12px; border:1px solid var(--line);">
-          <div>
-            <strong>${escapeHtml(d.title || d.id)}</strong>
-            <span class="muted" style="font-size:0.85rem; margin-left:8px;">${(d.wordCount || 0).toLocaleString()} words</span>
-            <span class="chip" style="margin-left:8px; font-size:0.75rem;">Priority #${idx + 1}</span>
+        <div style="display:flex; flex-direction:column; background:#fff; padding:10px 14px; border-radius:12px; border:1px solid var(--line);">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div>
+              <strong>${escapeHtml(d.title || d.id)}</strong>
+              <span class="muted" style="font-size:0.85rem; margin-left:8px;">${(d.wordCount || 0).toLocaleString()} words</span>
+              <span class="chip" style="margin-left:8px; font-size:0.75rem;">Priority #${idx + 1}</span>
+            </div>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="move-dict-up" data-index="${idx}" ${idx === 0 ? 'disabled style="opacity:0.5;"' : ''}>▲ Up</button>
+              <button type="button" class="move-dict-down" data-index="${idx}" ${idx === sortedDicts.length - 1 ? 'disabled style="opacity:0.5;"' : ''}>▼ Down</button>
+              <button type="button" class="delete-dict-btn" data-id="${escapeHtml(d.id)}" style="background:#8b261e;">Delete</button>
+            </div>
           </div>
-          <div style="display:flex; gap:6px;">
-            <button type="button" class="move-dict-up" data-index="${idx}" ${idx === 0 ? 'disabled style="opacity:0.5;"' : ''}>▲ Up</button>
-            <button type="button" class="move-dict-down" data-index="${idx}" ${idx === sortedDicts.length - 1 ? 'disabled style="opacity:0.5;"' : ''}>▼ Down</button>
-            <button type="button" class="delete-dict-btn" data-id="${escapeHtml(d.id)}" style="background:#8b261e;">Delete</button>
-          </div>
+          ${vectorControlsHtml}
         </div>
       `;
     });
@@ -144,6 +164,71 @@ document.addEventListener('DOMContentLoaded', () => {
           await window.DictionaryDB.deleteDictionary(dictId);
           currentDictOrder = currentDictOrder.filter(id => id !== dictId);
           chrome.storage.local.set({ dictionaryOrder: currentDictOrder });
+          updateDictStatus();
+        }
+      });
+    });
+
+    dictListContainer.querySelectorAll('.import-vector-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const dictId = e.target.getAttribute('data-id');
+        const fileInput = dictListContainer.querySelector(`.vector-file-input[data-id="${dictId}"]`);
+        if (fileInput) fileInput.click();
+      });
+    });
+
+    dictListContainer.querySelectorAll('.vector-file-input').forEach((input) => {
+      input.addEventListener('change', async (e) => {
+        const dictId = e.target.getAttribute('data-id');
+        const file = e.target.files ? e.target.files[0] : null;
+        if (!file || !dictId) return;
+
+        dictStatus.textContent = `Reading vector file ${file.name}...`;
+        try {
+          let vectorMap = {};
+          if (file.name.endsWith('.vec.bin') || file.name.endsWith('.bin')) {
+            const buffer = await file.arrayBuffer();
+            const metaLength = new DataView(buffer).getUint32(0, true);
+            const metaJsonText = new TextDecoder().decode(new Uint8Array(buffer, 4, metaLength));
+            const metaMap = JSON.parse(metaJsonText);
+            const vectorBufferOffset = 4 + metaLength;
+            const rawInt8Bytes = new Int8Array(buffer, vectorBufferOffset);
+
+            const DIM = 384;
+            Object.keys(metaMap).forEach((defStr) => {
+              const idx = metaMap[defStr];
+              const sliceOffset = idx * DIM;
+              vectorMap[defStr] = rawInt8Bytes.subarray(sliceOffset, sliceOffset + DIM);
+            });
+          } else {
+            const content = await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = (evt) => resolve(evt.target.result);
+              reader.readAsText(file);
+            });
+            const parsed = JSON.parse(content);
+            vectorMap = parsed.vectors || parsed;
+          }
+
+          dictStatus.textContent = `Importing precomputed vectors for dictionary "${dictId}"...`;
+          const updatedCount = await window.DictionaryDB.importPrecomputedVectorsForDict(dictId, vectorMap);
+          dictStatus.textContent = `✓ Imported vectors for ${updatedCount.toLocaleString()} terms in "${dictId}"!`;
+          alert(`Successfully imported precomputed vectors for ${updatedCount.toLocaleString()} terms!`);
+          updateDictStatus();
+        } catch (err) {
+          dictStatus.textContent = `Vector import error: ${err.message}`;
+          alert(`Vector import error: ${err.message}`);
+        }
+      });
+    });
+
+    dictListContainer.querySelectorAll('.remove-vector-btn').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        const dictId = e.target.getAttribute('data-id');
+        if (dictId && confirm(`Are you sure you want to remove precomputed vectors for dictionary "${dictId}"?`)) {
+          dictStatus.textContent = `Removing precomputed vectors for ${dictId}...`;
+          await window.DictionaryDB.removePrecomputedVectors(dictId);
+          dictStatus.textContent = `Precomputed vectors removed for ${dictId}.`;
           updateDictStatus();
         }
       });
