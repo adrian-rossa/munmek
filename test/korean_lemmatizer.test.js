@@ -48,4 +48,29 @@ describe('Korean Lemmatizer Rule Engine', () => {
     const texts = candidates.map(c => c.text);
     expect(texts).toContain('배고프다');
   });
+
+  it('strips locative particle -에 (e.g. 편의점에 -> 편의점)', () => {
+    const results = globalThis.KoreanLemmatizer.stripParticles('편의점에');
+    const stems = results.map(r => r.stem);
+    expect(stems).toContain('편의점');
+  });
+
+  it('strips compound particles -에도 and -께 (e.g. 학교에도 -> 학교, 선생님께 -> 선생님)', () => {
+    const resultsEdo = globalThis.KoreanLemmatizer.stripParticles('학교에도');
+    expect(resultsEdo.map(r => r.stem)).toContain('학교');
+
+    const resultsKke = globalThis.KoreanLemmatizer.stripParticles('선생님께');
+    expect(resultsKke.map(r => r.stem)).toContain('선생님');
+  });
+
+  it('strips copula -예요 (e.g.예요 -> 거)', () => {
+    const results = globalThis.KoreanLemmatizer.stripParticles('거예요');
+    expect(results.map(r => r.stem)).toContain('거');
+  });
+
+  it('deconjugates informal connective -아 endings (e.g. 작아 -> 작다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('작아');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('작다');
+  });
 });

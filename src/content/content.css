@@ -173,3 +173,45 @@
   color: #6c6458;
   font-style: italic;
 }
+
+#munmek-tooltip .munmek-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 16px;
+  background: #f4faf9;
+  border: 1px solid #bce0da;
+  border-radius: 14px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+#munmek-tooltip .munmek-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #d0e8e4;
+  border-top-color: #2f5d62;
+  border-radius: 50%;
+  animation: munmek-spin 0.75s linear infinite;
+  margin-bottom: 10px;
+}
+
+@keyframes munmek-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#munmek-tooltip .munmek-loading-text {
+  font-size: 0.88em;
+  font-weight: 700;
+  color: #17383b;
+  margin-bottom: 4px;
+}
+
+#munmek-tooltip .munmek-loading-subtext {
+  font-size: 0.78em;
+  color: #5c7477;
+}

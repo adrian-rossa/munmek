@@ -397,6 +397,100 @@
     });
   }
 
+  async function getEntriesForDict(dictId) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORDS, 'readonly');
+      const store = tx.objectStore(STORE_WORDS);
+      const index = store.index('dictId');
+      const req = index.getAll(dictId);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function updateEntriesBatch(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORDS, 'readwrite');
+      const store = tx.objectStore(STORE_WORDS);
+      entries.forEach((e) => store.put(e));
+      tx.oncomplete = () => {
+        invalidateDictMapCache();
+        resolve(true);
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function markDictPrecomputed(dictId, hasPrecomputed = true) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_DICTS, 'readwrite');
+      const store = tx.objectStore(STORE_DICTS);
+      const getReq = store.get(dictId);
+      getReq.onsuccess = () => {
+        const dictRecord = getReq.result;
+        if (dictRecord) {
+          dictRecord.hasPrecomputedVectors = Boolean(hasPrecomputed);
+          store.put(dictRecord);
+        }
+        resolve(true);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }
+
+  async function removePrecomputedVectors(dictId) {
+    const entries = await getEntriesForDict(dictId);
+    const modified = [];
+    entries.forEach((e) => {
+      if (e._defVectors) {
+        delete e._defVectors;
+        modified.push(e);
+      }
+    });
+    if (modified.length > 0) {
+      await updateEntriesBatch(modified);
+    }
+    await markDictPrecomputed(dictId, false);
+    invalidateDictMapCache();
+  }
+
+  async function importPrecomputedVectorsForDict(dictId, vectorMap) {
+    if (!vectorMap || typeof vectorMap !== 'object') {
+      throw new Error('Invalid vector map provided.');
+    }
+    const entries = await getEntriesForDict(dictId);
+    if (!entries || entries.length === 0) {
+      throw new Error(`No dictionary entries found for dictionary "${dictId}".`);
+    }
+
+    const modified = [];
+    entries.forEach((entry) => {
+      const rawDefs = Array.isArray(entry.definitions) ? entry.definitions : [];
+      let updated = false;
+      rawDefs.forEach((defStr) => {
+        const str = String(defStr).trim();
+        const vec = vectorMap[str] || vectorMap[str.toLowerCase()];
+        if (vec) {
+          if (!entry._defVectors) entry._defVectors = {};
+          entry._defVectors[str] = Array.isArray(vec) ? vec : Array.from(vec);
+          updated = true;
+        }
+      });
+      if (updated) modified.push(entry);
+    });
+
+    if (modified.length > 0) {
+      await updateEntriesBatch(modified);
+      invalidateDictMapCache();
+    }
+    await markDictPrecomputed(dictId, true);
+    return modified.length;
+  }
+
   const DictionaryDB = {
     openDB,
     getWordCount,
@@ -406,7 +500,12 @@
     clearDictionary,
     lookupSurface,
     lookupBase,
-    parseKrdictTermItem
+    parseKrdictTermItem,
+    getEntriesForDict,
+    updateEntriesBatch,
+    markDictPrecomputed,
+    removePrecomputedVectors,
+    importPrecomputedVectorsForDict
   };
 
   const targetGlobal = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : global);

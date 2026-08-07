@@ -3,12 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <title>Munmek Context & Settings</title>
+  <link rel="icon" type="image/png" href="../../assets/icon32.png">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="panel">
-    <div class="header">
-      <h1>Munmek Context</h1>
+    <div class="header" style="display: flex; align-items: center; gap: 10px;">
+      <img src="../../assets/icon32.png" alt="Munmek Icon" style="width: 28px; height: 28px; object-fit: contain;">
+      <h1 style="margin: 0; flex: 1; font-size: 1.15rem;">Munmek Context</h1>
       <button id="open-settings" class="secondary" style="padding: 4px 10px; font-size: 0.78rem;">⚙ Settings</button>
     </div>
 
@@ -23,7 +25,7 @@
       </label>
     </div>
 
-    <div class="section-title">Active Tab AI Context</div>
+    <div class="section-title">Active Tab Context</div>
     <div id="contextStatus" class="status-card">Checking active tab context...</div>
 
     <div class="btn-group">
@@ -42,7 +44,7 @@
     </div>
 
     <div class="hint">
-      Context is attached to Gemini requests on the active tab to provide deep context-aware translations and grammar notes.
+      Optionally, you can provide every LLM request with further context here (e.g. summary of the webpage/subtitle file).
     </div>
   </div>
   <script src="popup.js"></script>

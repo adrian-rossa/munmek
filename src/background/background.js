@@ -10,8 +10,10 @@ function ensureDictionaryDbLoaded() {
 }
 ensureDictionaryDbLoaded();
 
-const DEFAULT_MODEL_ID = 'gemini-2.0-flash-lite';
-const DEFAULT_PROMPT = `Analyze the Korean word '{WORD}' in sentence: '{SENTENCE}'
+const DEFAULT_MODEL_ID = 'gemini-flash-lite-latest';
+const DEFAULT_PROMPT = `Return ONLY valid JSON (no markdown backticks or commentary).
+
+Analyze the Korean word '{WORD}' in sentence: '{SENTENCE}'
 Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENCE2}'
 
 Rules:
@@ -29,9 +31,11 @@ Return JSON with "words_analysis": [{
 }]`;
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(['modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField'], (result) => {
+  chrome.storage.local.get(['modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'enableOnnxReranker', 'enableWebGpu'], (result) => {
     const defaults = {};
     if (!result.modelId) defaults.modelId = DEFAULT_MODEL_ID;
+    if (typeof result.enableOnnxReranker !== 'boolean') defaults.enableOnnxReranker = false;
+    if (typeof result.enableWebGpu !== 'boolean') defaults.enableWebGpu = false;
     if (!result.ankiConnectUrl) defaults.ankiConnectUrl = 'http://127.0.0.1:8765';
     if (!result.ankiDeckName) defaults.ankiDeckName = 'Korean';
     if (!result.ankiNoteType) defaults.ankiNoteType = 'Basic';
@@ -67,6 +71,49 @@ async function ensureOffscreenDocument() {
 
   await offscreenCreating;
   offscreenCreating = null;
+
+  for (let p = 0; p < 15; p++) {
+    const ready = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'PING_OFFSCREEN' }, (res) => {
+        if (chrome.runtime.lastError) {
+          resolve(false);
+        } else {
+          resolve(Boolean(res && res.pong));
+        }
+      });
+    });
+    if (ready) break;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+}
+
+async function sendToOffscreenWithRetry(message, maxRetries = 5, retryDelayMs = 200) {
+  await ensureOffscreenDocument();
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const result = await new Promise((resolve) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError) {
+          const err = chrome.runtime.lastError.message || '';
+          if (err.includes('Receiving end does not exist') || err.includes('Could not establish connection') || err.includes('closed before a response was received')) {
+            resolve({ retry: true, error: err });
+            return;
+          }
+          resolve({ ok: false, error: err });
+          return;
+        }
+        resolve(response || { ok: false, error: 'No response from offscreen document' });
+      });
+    });
+
+    if (!result.retry) {
+      return result;
+    }
+    if (attempt < maxRetries) {
+      await ensureOffscreenDocument();
+      await new Promise((r) => setTimeout(r, retryDelayMs));
+    }
+  }
+  return { ok: false, error: 'Could not establish connection to offscreen document after retries.' };
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -81,7 +128,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === 'rerankDictionaryEntries') {
-    handleRerankDictionaryEntriesRequest(request.entries, request.sentenceContext, request.word, sendResponse);
+    handleRerankDictionaryEntriesRequest(request.entries, request.sentenceContext, request.word, sendResponse, request);
     return true;
   }
 
@@ -160,8 +207,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.type === 'summarizeContext') {
-    handleContextSummarization(request.text, sendResponse);
+  if (request.type === 'rerankDictionaryEntries') {
+    handleRerankDictionaryEntriesRequest(request.entries, request.sentenceContext, request.word, sendResponse);
+    return true;
+  }
+
+  if (request.type === 'rerankCandidates') {
+    handleRerankCandidatesRequest(request.candidates, request.sentenceContext, sendResponse);
     return true;
   }
 
@@ -177,44 +229,60 @@ function handleRerankCandidatesRequest(candidates, sentenceContext, sendResponse
     }
 
     try {
-      await ensureOffscreenDocument();
-      chrome.runtime.sendMessage(
-        { type: 'OFFSCREEN_RERANK_CANDIDATES', candidates, sentenceContext },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          sendResponse(response || { ok: false, error: 'No response from offscreen document' });
-        }
-      );
+      const response = await sendToOffscreenWithRetry({
+        type: 'OFFSCREEN_RERANK_CANDIDATES',
+        candidates,
+        sentenceContext
+      });
+      sendResponse(response);
     } catch (err) {
       sendResponse({ ok: false, error: err.message });
     }
   });
 }
 
-function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, sendResponse) {
-  chrome.storage.local.get(['enableOnnxReranker'], async (result) => {
-    const isEnabled = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : true;
+function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, sendResponse, requestData = {}) {
+  const tBgRecv = Date.now();
+  chrome.storage.local.get(['enableOnnxReranker', 'enableWebGpu'], async (result) => {
+    const isEnabled = typeof result.enableOnnxReranker !== 'boolean' ? true : result.enableOnnxReranker;
+    const enableWebGpu = typeof result.enableWebGpu !== 'boolean' ? true : result.enableWebGpu;
     if (!isEnabled) {
       sendResponse({ ok: true, entries: entries || [], disabled: true });
       return;
     }
 
     try {
-      await ensureOffscreenDocument();
-      chrome.runtime.sendMessage(
-        { type: 'OFFSCREEN_RERANK_DICTIONARY_ENTRIES', entries, sentenceContext, word },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          sendResponse(response || { ok: false, error: 'No response from offscreen document' });
+      const tBgSentOffscreen = Date.now();
+      console.log(`[Munmek Background] [t=${tBgRecv}] Forwarding Stage 2 ONNX rerank request to offscreen document (enableWebGpu=${enableWebGpu}):`, { word, sentenceContext });
+      const response = await sendToOffscreenWithRetry({
+        type: 'OFFSCREEN_RERANK_DICTIONARY_ENTRIES',
+        entries,
+        sentenceContext,
+        word,
+        enableWebGpu
+      });
+      const tBgFinished = Date.now();
+      const bgTotalMs = tBgFinished - tBgRecv;
+
+      if (response && response.ok) {
+        const reasonStr = response.providerReason ? ` | Note: ${response.providerReason}` : '';
+        console.log(`[Munmek Background Timer] Stage 2 Rerank for '${word}' completed in ${bgTotalMs} ms [Provider: ${response.activeProvider || 'WASM'}${reasonStr}] (Offscreen: ${response.offscreenMs || '?'} ms, Query: ${response.queryMs || '?'} ms, ${response.passageCount || 0} passages [${response.precomputedHits || 0} precomputed] in ${response.passageMs || '?'} ms)`);
+        sendResponse({
+          ...response,
+          t_sent: requestData.t_sent || null,
+          t_bg_recv: tBgRecv,
+          t_bg_sent_offscreen: tBgSentOffscreen,
+          t_bg_finished: tBgFinished,
+          bgTotalMs
+        });
+      } else {
+        if (response && response.error) {
+          console.warn('[Munmek Background] Offscreen rerank notice:', response.error);
         }
-      );
+        sendResponse(response);
+      }
     } catch (err) {
+      console.error('[Munmek Background] Offscreen rerank error:', err);
       sendResponse({ ok: false, error: err.message });
     }
   });
@@ -223,17 +291,11 @@ function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, se
 function handleWasmAnalysisRequest(text, sendResponse) {
   (async () => {
     try {
-      await ensureOffscreenDocument();
-      chrome.runtime.sendMessage(
-        { type: 'OFFSCREEN_ANALYZE_KOREAN', text },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          sendResponse(response || { ok: false, error: 'No response from offscreen document' });
-        }
-      );
+      const response = await sendToOffscreenWithRetry({
+        type: 'OFFSCREEN_ANALYZE_KOREAN',
+        text
+      });
+      sendResponse(response);
     } catch (err) {
       sendResponse({ ok: false, error: err.message });
     }
@@ -248,56 +310,71 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
         return;
       }
 
-      const tabId = sender && sender.tab ? sender.tab.id : null;
-      if (tabId && activeTabContexts[tabId]) {
-        data.tabContext = activeTabContexts[tabId];
+      let systemInstruction = 'You are a precise Korean language assistant.';
+      let promptText = DEFAULT_PROMPT
+        .replace('{WORD}', data.word || '')
+        .replace('{SENTENCE}', data.sentence || '')
+        .replace('{PREV_SENTENCE}', data.prevSentence || '')
+        .replace('{PREV_SENTENCE2}', data.prevSentence2 || '');
+
+      let targetLangStr = 'English';
+      if (config.responseLanguage === 'custom') {
+        targetLangStr = (config.customResponseLanguage || '').trim() || 'English';
+      } else if (config.responseLanguage) {
+        targetLangStr = config.responseLanguage;
+      }
+      systemInstruction += ` Please provide all definitions, explanations, translations, and notes in ${targetLangStr}.`;
+
+      if (config.aiPromptExtension && config.aiPromptExtension.trim()) {
+        systemInstruction += ` Additional user instruction: ${config.aiPromptExtension.trim()}`;
       }
 
-      const prompt = buildSentenceAnalysisPrompt(config.aiPromptExtension, data, Boolean(config.useFullContext), config.responseLanguage, config.customResponseLanguage);
-      console.log('[Munmek Gemini ContextSentencesSent]', {
-        word: data.word,
-        sentence: data.sentence,
-        prevSentence: data.prevSentence || '(none)',
-        prevSentence2: data.prevSentence2 || '(none)'
-      });
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelId}:generateContent?key=${config.apiKey}`;
+      const bodyData = {
+        contents: [
+          {
+            parts: [
+              { text: promptText }
+            ]
+          }
+        ],
+        systemInstruction: {
+          parts: [
+            { text: systemInstruction }
+          ]
+        },
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      };
 
-      const response = await fetch(apiUrl, {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelId}:generateContent?key=${config.apiKey}`;
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: 'application/json'
-          }
-        })
+        body: JSON.stringify(bodyData)
       });
 
       if (!response.ok) {
-        const errorBody = await response.text();
-        sendResponse({ error: `API error ${response.status}: ${response.statusText}`, details: errorBody });
+        const errorText = await response.text();
+        sendResponse({ error: `API request failed with status ${response.status}: ${errorText}` });
         return;
       }
 
-      const jsonResponse = await response.json();
-      const text = jsonResponse?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim();
-
-      if (!text) {
-        sendResponse({ error: 'Gemini returned no usable text.', details: jsonResponse });
+      const resJson = await response.json();
+      let textContent = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!textContent) {
+        sendResponse({ error: 'Empty response text from Gemini API.' });
         return;
       }
 
-      const parsed = parseJsonResponse(text);
-      if (!parsed.ok) {
-        sendResponse({ error: parsed.error, rawResponse: text });
-        return;
+      try {
+        const parsed = JSON.parse(textContent);
+        sendResponse({ data: parsed });
+      } catch (pErr) {
+        sendResponse({ error: `Failed to parse Gemini API JSON response: ${pErr.message}` });
       }
-
-      trackDynamicGeminiFields(parsed.value);
-
-      sendResponse({ data: parsed.value });
-    } catch (error) {
-      sendResponse({ error: `Network or parsing error: ${error.message}` });
+    } catch (err) {
+      sendResponse({ error: err.message });
     }
   });
 }
@@ -306,348 +383,119 @@ function handleQuickGeminiFallback(data, sendResponse) {
   chrome.storage.local.get(['apiKey', 'modelId', 'responseLanguage', 'customResponseLanguage'], async (config) => {
     try {
       if (!config.apiKey || !config.modelId) {
-        sendResponse({ error: 'Gemini API key is not configured.' });
+        sendResponse({ error: 'Gemini API Key or Model is not configured.' });
         return;
       }
 
-      const word = data.word || '';
-      const sentence = data.sentence || '';
-      const langInstr = getLanguageInstruction(config.responseLanguage, config.customResponseLanguage);
-      const prompt = `Provide a concise 1-sentence dictionary definition, Part of Speech, and Hanja (if applicable) for the Korean word "${word}" used in the sentence: "${sentence}".${langInstr ? ' ' + langInstr.trim() : ''}\nReturn JSON strictly matching this schema: {"translation": "concise definition", "pos": "Noun/Verb/Adjective/etc.", "hanja": "〔韓國語〕 or empty"}`;
+      let targetLangStr = 'English';
+      if (config.responseLanguage === 'custom') {
+        targetLangStr = (config.customResponseLanguage || '').trim() || 'English';
+      } else if (config.responseLanguage) {
+        targetLangStr = config.responseLanguage;
+      }
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelId}:generateContent?key=${config.apiKey}`;
+      const prompt = `JSON only (no markdown): {"definitions":["definition in ${targetLangStr}"],"pos":"part of speech","grammar_notes":"usage note"}
+Analyze '${data.word}' in sentence: '${data.sentence || ''}'`;
 
-      const response = await fetch(apiUrl, {
+      const bodyData = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' }
+      };
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.modelId}:generateContent?key=${config.apiKey}`;
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: 'application/json'
-          }
-        })
+        body: JSON.stringify(bodyData)
       });
 
-      if (!response.ok) {
-        const errorBody = await response.text();
-        sendResponse({ error: `Quick LLM API error ${response.status}: ${response.statusText}`, details: errorBody });
+      if (!res.ok) {
+        sendResponse({ error: `Gemini API returned status ${res.status}` });
         return;
       }
 
-      const jsonResponse = await response.json();
-      const text = jsonResponse?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim();
-      const parsed = parseJsonResponse(text);
-
-      if (!parsed.ok) {
-        sendResponse({ error: parsed.error, rawResponse: text });
-        return;
+      const resJson = await res.json();
+      const text = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        sendResponse({ data: JSON.parse(text) });
+      } else {
+        sendResponse({ error: 'Empty response' });
       }
-
-      sendResponse({ data: parsed.value });
     } catch (err) {
-      sendResponse({ error: `Quick Fallback error: ${err.message}` });
+      sendResponse({ error: err.message });
     }
   });
 }
 
 function handleAnkiCardRequest(data, sendResponse) {
-  chrome.storage.local.get(['ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping'], async (config) => {
+  chrome.storage.local.get(['ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField'], async (config) => {
     try {
-      if (!config.ankiConnectUrl || !config.ankiDeckName || !config.ankiNoteType) {
-        sendResponse({ error: 'AnkiConnect settings are incomplete. Open extension settings first.' });
-        return;
-      }
+      const ankiUrl = config.ankiConnectUrl || 'http://127.0.0.1:8765';
+      const deckName = config.ankiDeckName || 'Korean';
+      const noteType = config.ankiNoteType || 'Basic';
+      const defField = config.ankiDefinitionField || 'Back';
 
-      const payload = buildAnkiPayload(config, data);
-      const result = await callAnkiConnect(config.ankiConnectUrl, 'addNote', {
-        note: {
-          deckName: config.ankiDeckName,
-          modelName: config.ankiNoteType,
-          fields: payload.fields,
-          tags: payload.tags
+      let fields = {};
+      if (config.ankiFieldMapping) {
+        try {
+          const mapping = JSON.parse(config.ankiFieldMapping);
+          for (const [key, valTemplate] of Object.entries(mapping)) {
+            let filled = String(valTemplate)
+              .replace(/\{\{word\}\}/g, data.word || '')
+              .replace(/\{\{surface\}\}/g, data.surface || data.word || '')
+              .replace(/\{\{base\}\}/g, data.base || data.word || '')
+              .replace(/\{\{definition\}\}/g, data.definition || '')
+              .replace(/\{\{definitions\}\}/g, data.definition || '')
+              .replace(/\{\{translation\}\}/g, data.translation || '')
+              .replace(/\{\{sentence\}\}/g, data.sentence || '')
+              .replace(/\{\{grammar\}\}/g, data.grammar || data.grammarNotes || '')
+              .replace(/\{\{pos\}\}/g, data.pos || '');
+            fields[key] = filled;
+          }
+        } catch (e) {
+          console.warn('[Munmek Anki] Failed to parse custom mapping, using default fields:', e);
         }
-      });
-
-      if (result) {
-        chrome.storage.local.set({ lastCreatedAnkiNoteId: result });
       }
 
-      sendResponse({ data: { created: true, noteId: result } });
-    } catch (error) {
-      sendResponse({ error: `AnkiConnect error: ${error.message}` });
-    }
-  });
-}
-
-function getLanguageInstruction(responseLanguage, customResponseLanguage) {
-  if (!responseLanguage || responseLanguage.toLowerCase() === 'english') {
-    return '';
-  }
-  const langName = responseLanguage === 'Custom' ? (customResponseLanguage || 'target language') : responseLanguage;
-  return `Important: Provide all definitions, translations, and explanations in ${langName}.`;
-}
-
-function buildSentenceAnalysisPrompt(userExtension, data, useFullContext = false, responseLanguage = 'English', customResponseLanguage = '') {
-  const context = {
-    word: data.word || '',
-    sentence: data.sentence || '',
-    prevSentence: data.prevSentence || '',
-    prevSentence2: data.prevSentence2 || ''
-  };
-
-  let promptText = replacePromptPlaceholders(DEFAULT_PROMPT, context);
-
-  if (data.tabContext && data.tabContext.text) {
-    const limit = useFullContext ? 15000 : 3000;
-    promptText += `\n\nActive Tab/Subtitles Context (${data.tabContext.name || 'Webpage'}):\n${data.tabContext.text.slice(0, limit)}`;
-  }
-
-  const langInstr = getLanguageInstruction(responseLanguage, customResponseLanguage);
-  if (langInstr) {
-    promptText += `\n\n${langInstr}`;
-  }
-
-  if (userExtension && userExtension.trim()) {
-    promptText += `\n\nAdditional User Style & Constraints:\n${userExtension.trim()}`;
-  }
-
-  return promptText;
-}
-
-function trackDynamicGeminiFields(responseObj) {
-  if (!responseObj || typeof responseObj !== 'object') return;
-  
-  const targetObj = unpackAnalysis(responseObj);
-
-  chrome.storage.local.get(['trackedGeminiFields', 'totalGeminiLookups', 'aiPromptExtension'], (res) => {
-    let fieldsMap = res.trackedGeminiFields || {};
-    let totalLookups = (res.totalGeminiLookups || 0) + 1;
-    const promptText = res.aiPromptExtension || '';
-
-    const reservedKeys = new Set([
-      'words_analysis', 'words', 'analysis', 'conjugation', 'translation', 'grammar',
-      'notes', 'hanja', 'pos', 'word', 'base', 'sentence', 'prevSentence', 'prevSentence2',
-      'candidate', 'definition'
-    ]);
-
-    const allKeys = new Set([...Object.keys(responseObj), ...Object.keys(targetObj)]);
-
-    allKeys.forEach((key) => {
-      if (!reservedKeys.has(key) && key.length >= 2) {
-        fieldsMap[key] = totalLookups;
-      }
-    });
-
-    Object.keys(fieldsMap).forEach((key) => {
-      const isInPrompt = promptText.includes(key);
-      const isStale = (totalLookups - fieldsMap[key] > 5);
-      if (!isInPrompt && isStale) {
-        delete fieldsMap[key];
-      }
-    });
-
-    chrome.storage.local.set({
-      trackedGeminiFields: fieldsMap,
-      totalGeminiLookups: totalLookups
-    });
-  });
-}
-
-function replacePromptPlaceholders(prompt, context) {
-  return prompt
-    .replace(/\{WORD\}/g, context.word)
-    .replace(/\{SENTENCE\}/g, context.sentence)
-    .replace(/\{PREV_SENTENCE\}/g, context.prevSentence || '')
-    .replace(/\{PREV_SENTENCE2\}/g, context.prevSentence2 || '')
-    .replace(/\{DICTIONARY_ENTRY\}/g, context.dictionaryCandidate ? JSON.stringify(context.dictionaryCandidate, null, 2) : '');
-}
-
-function parseJsonResponse(text) {
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-
-  try {
-    return { ok: true, value: JSON.parse(cleaned) };
-  } catch (error) {
-    return { ok: false, error: `Failed to parse JSON response: ${error.message}` };
-  }
-}
-
-function buildAnkiPayload(config, data) {
-  let fieldMapping = {};
-
-  try {
-    fieldMapping = config.ankiFieldMapping ? JSON.parse(config.ankiFieldMapping) : {};
-  } catch (error) {
-    throw new Error(`Invalid Anki field mapping JSON: ${error.message}`);
-  }
-
-  const context = buildTemplateContext(data);
-  const fields = {};
-
-  Object.entries(fieldMapping).forEach(([fieldName, template]) => {
-    const rendered = renderTemplate(String(template || ''), context);
-    fields[fieldName] = convertNewlinesToBr(rendered);
-  });
-
-  if (config.ankiUpdateLastCard) {
-    const definitionField = config.ankiDefinitionField || 'Back';
-    const definitionValue = renderDefinitionText(context);
-    fields[definitionField] = convertNewlinesToBr(definitionValue);
-  }
-
-  return {
-    fields,
-    tags: ['munmek', 'korean-lookup']
-  };
-}
-
-function convertNewlinesToBr(str) {
-  if (typeof str !== 'string' || !str) return '';
-  return str.replace(/\r?\n/g, '<br>');
-}
-
-function unpackAnalysis(raw) {
-  if (!raw || typeof raw !== 'object') return {};
-  let target = raw;
-  if (Array.isArray(target.words_analysis) && target.words_analysis.length > 0) {
-    target = target.words_analysis[0];
-  } else if (Array.isArray(target.analysis) && target.analysis.length > 0) {
-    target = target.analysis[0];
-  } else if (target.analysis && typeof target.analysis === 'object') {
-    target = target.analysis;
-  }
-  return target || {};
-}
-
-function buildTemplateContext(data) {
-  const dictionaryEntry = data.dictionaryEntry || {};
-  const rawAnalysis = data.analysis || {};
-  const rawQuick = data.quickFallback || {};
-  const fullAnalysis = unpackAnalysis(rawAnalysis);
-  const quickAnalysis = unpackAnalysis(rawQuick);
-  const definitions = Array.isArray(dictionaryEntry.definitions) ? dictionaryEntry.definitions : [];
-
-  const geminiTranslation = fullAnalysis.translation || fullAnalysis.definition || (Array.isArray(fullAnalysis.definitions) ? fullAnalysis.definitions.join('; ') : '') || quickAnalysis.translation || quickAnalysis.definition || (Array.isArray(quickAnalysis.definitions) ? quickAnalysis.definitions.join('; ') : '');
-  const geminiGrammar = fullAnalysis.grammar || fullAnalysis.grammar_notes || (fullAnalysis.conjugation && typeof fullAnalysis.conjugation === 'object' ? fullAnalysis.conjugation.explanation : '') || quickAnalysis.grammar || quickAnalysis.grammar_notes || '';
-  const geminiHanja = (dictionaryEntry && dictionaryEntry.hanja) || fullAnalysis.hanja || quickAnalysis.hanja || '';
-
-  const primaryDef = data.selectedDefinition || (definitions.length > 0 ? definitions.join('; ') : '') || geminiTranslation;
-  const primaryHanja = (dictionaryEntry && dictionaryEntry.hanja) || geminiHanja;
-
-  const activeAnalysisObj = Object.keys(fullAnalysis).length > 0 ? fullAnalysis : quickAnalysis;
-
-  const ctx = {
-    word: data.word || '',
-    base: dictionaryEntry.base || fullAnalysis.base || quickAnalysis.base || data.word || '',
-    pos: dictionaryEntry.pos || fullAnalysis.pos || quickAnalysis.pos || '',
-    definition: primaryDef,
-    translation: geminiTranslation || primaryDef,
-    grammar: geminiGrammar || activeAnalysisObj.notes || dictionaryEntry.grammar_notes || '',
-    hanja: primaryHanja,
-    notes: activeAnalysisObj.notes || dictionaryEntry.grammar_notes || '',
-    sentence: data.sentence || '',
-    prevSentence: data.prevSentence || '',
-    prevSentence2: data.prevSentence2 || '',
-    candidate: data.candidate || '',
-    analysisJson: rawAnalysis && Object.keys(rawAnalysis).length > 0 ? JSON.stringify(rawAnalysis, null, 2) : (rawQuick && Object.keys(rawQuick).length > 0 ? JSON.stringify(rawQuick, null, 2) : '')
-  };
-
-  if (activeAnalysisObj && typeof activeAnalysisObj === 'object') {
-    Object.keys(activeAnalysisObj).forEach((key) => {
-      if (!(key in ctx)) {
-        const val = activeAnalysisObj[key];
-        ctx[key] = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
-      }
-    });
-  }
-
-  return ctx;
-}
-
-function renderDefinitionText(context) {
-  const parts = [context.definition, context.translation, context.grammar].filter(Boolean);
-  return parts.join('\n\n').trim();
-}
-
-function renderTemplate(template, context) {
-  let result = String(template || '');
-  Object.keys(context).forEach((key) => {
-    const regex = new RegExp(`\\{\\{${key}\\}\\}`, 'gi');
-    result = result.replace(regex, context[key] !== undefined && context[key] !== null ? String(context[key]) : '');
-  });
-  return result.replace(/\{\{[^}]+\}\}/g, '');
-}
-
-async function callAnkiConnect(baseUrl, action, params) {
-  const response = await fetch(baseUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, version: 6, params })
-  });
-
-  if (!response.ok) {
-    throw new Error(`AnkiConnect HTTP ${response.status}: ${response.statusText}`);
-  }
-
-  const result = await response.json();
-  if (result.error) {
-    throw new Error(result.error);
-  }
-
-  return result.result;
-}
-
-function handleContextSummarization(rawText, sendResponse) {
-  chrome.storage.local.get(['apiKey', 'modelId', 'useFullContext', 'enableCheaperSummaryModel', 'cheaperSummaryModelId'], async (config) => {
-    try {
-      if (!config.apiKey) {
-        sendResponse({ error: 'Gemini API key is not configured.' });
-        return;
+      if (Object.keys(fields).length === 0) {
+        fields = {
+          Front: data.word || '',
+          [defField]: `${data.definition || ''}<br><br><i>${data.sentence || ''}</i>`
+        };
       }
 
-      const activeModelId = (config.enableCheaperSummaryModel && config.cheaperSummaryModelId)
-        ? config.cheaperSummaryModelId.trim()
-        : (config.modelId || DEFAULT_MODEL_ID);
+      const body = {
+        action: 'addNote',
+        version: 6,
+        params: {
+          note: {
+            deckName: deckName,
+            modelName: noteType,
+            fields: fields,
+            tags: ['munmek-korean']
+          }
+        }
+      };
 
-      let textToSummarize = rawText || '';
-      if (!config.useFullContext && textToSummarize.length > 3000) {
-        const head = textToSummarize.slice(0, 2000);
-        const tail = textToSummarize.slice(-1000);
-        textToSummarize = `${head}\n\n[... middle section abbreviated for token efficiency ...]\n\n${tail}`;
-      } else if (textToSummarize.length > 8000) {
-        textToSummarize = textToSummarize.slice(0, 8000);
-      }
-
-      const prompt = `Summarize the following text from a webpage/subtitle track into a clear, concise background summary (key entities, main topic, setting, and plot/overview) to serve as linguistic context for analyzing Korean sentences in this document. Keep the summary focused and under 400 words.\n\nText:\n${textToSummarize}`;
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${activeModelId}:generateContent?key=${config.apiKey}`;
-
-      const response = await fetch(apiUrl, {
+      const res = await fetch(ankiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
+        body: JSON.stringify(body)
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        sendResponse({ error: `Summarization API error (${activeModelId}): ${response.statusText}`, details: errText });
+      if (!res.ok) {
+        sendResponse({ error: `AnkiConnect HTTP error ${res.status}` });
         return;
       }
 
-      const json = await response.json();
-      const summaryText = json?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
-      sendResponse({
-        summary: summaryText || textToSummarize.slice(0, 1000),
-        rawCharCount: (rawText || '').length,
-        charCount: textToSummarize.length,
-        useFullContext: Boolean(config.useFullContext)
-      });
+      const resJson = await res.json();
+      if (resJson.error) {
+        sendResponse({ error: resJson.error });
+      } else {
+        sendResponse({ success: true, noteId: resJson.result });
+      }
     } catch (err) {
-      sendResponse({ error: `Summarization failed: ${err.message}` });
+      sendResponse({ error: `Failed to connect to AnkiConnect at ${config.ankiConnectUrl || 'http://127.0.0.1:8765'}: ${err.message}` });
     }
   });
 }

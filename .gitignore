@@ -23,5 +23,11 @@ __pycache__/
 *.pyc
 *fp32.onnx
 lib/models/multilingual_e5_small_int8.onnx
+lib/models/vectors.bin
+lib/models/vector_index.json
+scripts/*_vectors.json
+scripts/*_vectors.bin
+scripts/*_vectors.vec.bin
+*.vec.bin
 
 

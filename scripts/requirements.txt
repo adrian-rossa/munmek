@@ -1,4 +1,6 @@
-# Requirements for export_koelectra_onnx.py
-torch>=2.0.0
+# Dependencies for Python GPU vector precomputation
+numpy>=1.22.0
 transformers>=4.30.0
-onnxruntime>=1.15.0
+torch>=2.0.0
+onnxruntime-directml>=1.15.0
+

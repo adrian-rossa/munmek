@@ -6,6 +6,9 @@
   "author": "Adrian Rossa",
   "homepage_url": "https://github.com/adrian-rossa/munmek#readme",
   "permissions": ["storage", "offscreen"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "background": {
     "service_worker": "src/background/background.js"
   },
@@ -47,10 +50,12 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "assets/*",
         "src/content/content.css",
         "korean_words.json",
         "src/offscreen/offscreen.html",
         "src/offscreen/offscreen.js",
+        "src/offscreen/offscreen_bridge.js",
         "lib/garu/*",
         "lib/onnx/*",
         "lib/models/*"
