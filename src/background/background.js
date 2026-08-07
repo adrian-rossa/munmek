@@ -31,11 +31,11 @@ Return JSON with "words_analysis": [{
 }]`;
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(['modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'enableOnnxReranker'], (result) => {
+  chrome.storage.local.get(['modelId', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'enableOnnxReranker', 'enableWebGpu'], (result) => {
     const defaults = {};
     if (!result.modelId) defaults.modelId = DEFAULT_MODEL_ID;
-    if (typeof result.enableOnnxReranker !== 'boolean') defaults.enableOnnxReranker = true;
-    if (typeof result.enableWebGpu !== 'boolean') defaults.enableWebGpu = true;
+    if (typeof result.enableOnnxReranker !== 'boolean') defaults.enableOnnxReranker = false;
+    if (typeof result.enableWebGpu !== 'boolean') defaults.enableWebGpu = false;
     if (!result.ankiConnectUrl) defaults.ankiConnectUrl = 'http://127.0.0.1:8765';
     if (!result.ankiDeckName) defaults.ankiDeckName = 'Korean';
     if (!result.ankiNoteType) defaults.ankiNoteType = 'Basic';
@@ -243,8 +243,9 @@ function handleRerankCandidatesRequest(candidates, sentenceContext, sendResponse
 
 function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, sendResponse, requestData = {}) {
   const tBgRecv = Date.now();
-  chrome.storage.local.get(['enableOnnxReranker'], async (result) => {
-    const isEnabled = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : true;
+  chrome.storage.local.get(['enableOnnxReranker', 'enableWebGpu'], async (result) => {
+    const isEnabled = typeof result.enableOnnxReranker !== 'boolean' ? true : result.enableOnnxReranker;
+    const enableWebGpu = typeof result.enableWebGpu !== 'boolean' ? true : result.enableWebGpu;
     if (!isEnabled) {
       sendResponse({ ok: true, entries: entries || [], disabled: true });
       return;
@@ -252,12 +253,13 @@ function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, se
 
     try {
       const tBgSentOffscreen = Date.now();
-      console.log(`[Munmek Background] [t=${tBgRecv}] Forwarding Stage 2 ONNX rerank request to offscreen document:`, { word, sentenceContext });
+      console.log(`[Munmek Background] [t=${tBgRecv}] Forwarding Stage 2 ONNX rerank request to offscreen document (enableWebGpu=${enableWebGpu}):`, { word, sentenceContext });
       const response = await sendToOffscreenWithRetry({
         type: 'OFFSCREEN_RERANK_DICTIONARY_ENTRIES',
         entries,
         sentenceContext,
-        word
+        word,
+        enableWebGpu
       });
       const tBgFinished = Date.now();
       const bgTotalMs = tBgFinished - tBgRecv;

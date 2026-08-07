@@ -193,9 +193,33 @@
     return koelectraSession;
   }
 
-  async function initMultilingualSession() {
-    if (multilingualSession) return multilingualSession;
+  async function initMultilingualSession(enableWebGpuOverride = null) {
     await ensureOrtLoaded();
+
+    let enableWebGpu = true;
+    if (typeof enableWebGpuOverride === 'boolean') {
+      enableWebGpu = enableWebGpuOverride;
+    } else if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      enableWebGpu = await new Promise((resolve) => {
+        chrome.storage.local.get(['enableWebGpu'], (res) => {
+          const val = res && typeof res.enableWebGpu === 'boolean' ? res.enableWebGpu : true;
+          console.log('[Munmek ONNX Stage 2] Storage setting enableWebGpu =', val, '(raw res:', res, ')');
+          resolve(val);
+        });
+      });
+    }
+
+    if (multilingualSession) {
+      if (!enableWebGpu && multilingualSession._activeProvider === 'WEBGPU') {
+        console.log('[Munmek ONNX Stage 2] WebGPU option disabled in settings. Releasing existing WebGPU session...');
+        try {
+          if (typeof multilingualSession.release === 'function') multilingualSession.release();
+        } catch (e) {}
+        multilingualSession = null;
+      } else {
+        return multilingualSession;
+      }
+    }
 
     try {
       let modelBuffer = null;
@@ -232,13 +256,6 @@
 
       if (modelBuffer && typeof globalThis.ort !== 'undefined') {
         try {
-          let enableWebGpu = true;
-          if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            enableWebGpu = await new Promise((resolve) => {
-              chrome.storage.local.get(['enableWebGpu'], (res) => resolve(res && typeof res.enableWebGpu === 'boolean' ? res.enableWebGpu : true));
-            });
-          }
-
           let useWebGpu = false;
           if (enableWebGpu && typeof navigator !== 'undefined' && navigator.gpu) {
             try {
@@ -293,6 +310,18 @@
     return multilingualSession;
   }
 
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'local' && (changes.enableWebGpu || changes.enableOnnxReranker)) {
+        console.log('[Munmek ONNX Stage 2] Settings changed (enableWebGpu/enableOnnxReranker). Invalidating cached ONNX session...');
+        if (multilingualSession && typeof multilingualSession.release === 'function') {
+          try { multilingualSession.release(); } catch (e) {}
+        }
+        multilingualSession = null;
+      }
+    });
+  }
+
   async function computeEmbedding(text, maxLen = 32) {
     const session = await initKoelectraSession();
     if (!session || !tokenizerInstance) return null;
@@ -324,8 +353,8 @@
     }
   }
 
-  async function computeMultilingualEmbedding(text, maxLen = 64) {
-    const session = await initMultilingualSession();
+  async function computeMultilingualEmbedding(text, maxLen = 64, enableWebGpuOverride = null) {
+    const session = await initMultilingualSession(enableWebGpuOverride);
     if (session && multilingualTokenizerInstance) {
       try {
         const encoded = multilingualTokenizerInstance.encode(text, maxLen);
@@ -407,15 +436,15 @@
     return null;
   }
 
-  async function computeMultilingualEmbeddingsBatch(textsArray, maxLen = 64) {
+  async function computeMultilingualEmbeddingsBatch(textsArray, maxLen = 64, enableWebGpuOverride = null) {
     if (!Array.isArray(textsArray) || textsArray.length === 0) return [];
     if (textsArray.length === 1) {
-      const single = await computeMultilingualEmbedding(textsArray[0], maxLen);
+      const single = await computeMultilingualEmbedding(textsArray[0], maxLen, enableWebGpuOverride);
       return [single];
     }
-    const session = await initMultilingualSession();
+    const session = await initMultilingualSession(enableWebGpuOverride);
     if (!session || !multilingualTokenizerInstance) {
-      return Promise.all(textsArray.map((t) => computeMultilingualEmbedding(t, maxLen)));
+      return Promise.all(textsArray.map((t) => computeMultilingualEmbedding(t, maxLen, enableWebGpuOverride)));
     }
 
     try {
@@ -859,28 +888,36 @@
     }
 
     let highestSim = -Infinity;
+    let secondSim = -Infinity;
     let bestDefIndex = 0;
 
     for (let i = 0; i < rawSims.length; i++) {
       const sim = rawSims[i];
       if (sim > highestSim) {
+        secondSim = highestSim;
         highestSim = sim;
         bestDefIndex = i;
+      } else if (sim > secondSim) {
+        secondSim = sim;
       }
     }
 
-    const T = 0.04;
-    const maxSim = highestSim;
-    const expSims = rawSims.map((sim) => Math.exp((sim - maxSim) / T));
-    const sumExp = expSims.reduce((a, b) => a + b, 0);
-    const probs = expSims.map((exp) => exp / (sumExp || 1));
+    if (secondSim === -Infinity) secondSim = highestSim - 0.05;
 
-    const absScale = Math.min(1.0, Math.max(0.5, (highestSim + 0.1) / 0.35));
+    const margin = Math.max(0, highestSim - secondSim);
+    
+    // Absolute similarity quality (typical E5 cosine range: 0.15 to 0.40)
+    const baseQuality = Math.min(1.0, Math.max(0.4, (highestSim - 0.10) / 0.25));
+    
+    // Top confidence scales from 75% to 95% depending on absolute similarity and margin
+    const topConfVal = Math.min(95, Math.max(72, Math.round(72 + baseQuality * 15 + Math.min(1.0, margin / 0.04) * 8)));
 
-    const defConfidenceScores = probs.map((prob) => {
-      const baseConf = 52 + prob * 43 * absScale;
-      const calibratedPercent = Math.min(95, Math.max(52, Math.round(baseConf)));
-      return `${calibratedPercent}%`;
+    const defConfidenceScores = rawSims.map((sim, idx) => {
+      if (idx === bestDefIndex) return `${topConfVal}%`;
+      const gap = highestSim - sim;
+      const dropRatio = Math.min(1.0, gap / 0.05);
+      const conf = Math.max(52, Math.round(topConfVal - dropRatio * (topConfVal - 52)));
+      return `${conf}%`;
     });
 
     return { bestDefIndex, highestSim, defConfidenceScores };
@@ -990,13 +1027,13 @@
    * Stage 2: Multilingual E5 Neural ONNX Definition Sense Reranker & Confidence Scorer
    * Optimized with Pre-computed Int8 Definition Vector Store & Parallel Passages
    */
-  async function rerankDictionaryEntriesAsync(entries, sentenceContext = '', targetWord = '') {
-    const nextTask = stage2Queue.then(() => _doRerankDictionaryEntriesAsync(entries, sentenceContext, targetWord));
+  async function rerankDictionaryEntriesAsync(entries, sentenceContext = '', targetWord = '', enableWebGpuOverride = null) {
+    const nextTask = stage2Queue.then(() => _doRerankDictionaryEntriesAsync(entries, sentenceContext, targetWord, enableWebGpuOverride));
     stage2Queue = nextTask.catch(() => {});
     return nextTask;
   }
 
-  async function _doRerankDictionaryEntriesAsync(entries, sentenceContext = '', targetWord = '') {
+  async function _doRerankDictionaryEntriesAsync(entries, sentenceContext = '', targetWord = '', enableWebGpuOverride = null) {
     if (!Array.isArray(entries) || entries.length === 0) return entries || [];
     const sentence = (sentenceContext || '').trim();
     if (!sentence) return entries;
@@ -1007,11 +1044,12 @@
       console.log('[Munmek ONNX Stage 2] Starting E5 sense reranking...', {
         targetWord,
         sentence,
-        entryCount: entries.length
+        entryCount: entries.length,
+        enableWebGpuOverride
       });
 
       const tQStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      const queryEmbedding = await computeMultilingualEmbedding(`query: ${sentence}`, 64);
+      const queryEmbedding = await computeMultilingualEmbedding(`query: ${sentence}`, 64, enableWebGpuOverride);
       const tQEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
       const queryMs = Number((tQEnd - tQStart).toFixed(2));
 
@@ -1038,7 +1076,18 @@
           passageCount += passages.length;
 
           for (const defText of passages) {
-            if (entry._defVectors && entry._defVectors[defText]) {
+            let hasInline = false;
+            if (entry._defVectors) {
+              if (entry._defVectors[defText]) {
+                hasInline = true;
+              } else {
+                const cleanKey = defText.toLowerCase().trim();
+                const keys = Object.keys(entry._defVectors);
+                const matchedKey = keys.find(k => k === defText || k.toLowerCase().trim() === cleanKey || defText.includes(k) || k.includes(defText));
+                if (matchedKey) hasInline = true;
+              }
+            }
+            if (hasInline) {
               precomputedHits++;
               continue;
             }
@@ -1059,7 +1108,7 @@
       const uncachedList = Array.from(uncachedPassagesSet);
       const computedEmbeddingsMap = new Map();
       if (uncachedList.length > 0) {
-        const batchEmbeddings = await computeMultilingualEmbeddingsBatch(uncachedList, 64);
+        const batchEmbeddings = await computeMultilingualEmbeddingsBatch(uncachedList, 64, enableWebGpuOverride);
         for (let i = 0; i < uncachedList.length; i++) {
           if (batchEmbeddings[i]) {
             computedEmbeddingsMap.set(uncachedList[i], batchEmbeddings[i]);

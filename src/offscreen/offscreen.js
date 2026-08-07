@@ -134,7 +134,7 @@ globalThis.handleOffscreenAnalyzeKorean = handleOffscreenAnalyzeKorean;
       try {
         let reranked = request.entries || [];
         if (typeof globalThis.OnnxReranker !== 'undefined' && globalThis.OnnxReranker.rerankDictionaryEntriesAsync) {
-          reranked = await globalThis.OnnxReranker.rerankDictionaryEntriesAsync(reranked, request.sentenceContext || '', request.word || '');
+          reranked = await globalThis.OnnxReranker.rerankDictionaryEntriesAsync(reranked, request.sentenceContext || '', request.word || '', request.enableWebGpu);
         } else if (typeof globalThis.OnnxReranker !== 'undefined' && globalThis.OnnxReranker.rerankDictionaryEntries) {
           reranked = globalThis.OnnxReranker.rerankDictionaryEntries(reranked, request.sentenceContext || '', request.word || '');
         }

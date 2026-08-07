@@ -92,21 +92,29 @@ document.addEventListener('DOMContentLoaded', () => {
       if (d.id === currentSelected) opt.selected = true;
       selectedDictionaryIdInput.appendChild(opt);
 
+      const isRerankerEnabled = Boolean(enableOnnxRerankerInput && enableOnnxRerankerInput.checked);
+      const vectorSection = document.getElementById('vectorPrecomputationSection');
+      if (vectorSection) {
+        vectorSection.style.display = isRerankerEnabled ? 'block' : 'none';
+      }
+
       let vectorControlsHtml = '';
-      if (d.hasPrecomputedVectors) {
-        vectorControlsHtml = `
-          <div style="margin-top:6px; display:flex; align-items:center; gap:8px;">
-            <span class="chip" style="background:#e6f4ea; color:#137333; font-weight:700;">⚡ Vector Cached</span>
-            <button type="button" class="remove-vector-btn" data-id="${escapeHtml(d.id)}" style="background:#8b261e; font-size:0.8rem; padding:4px 8px;">Remove Vectors</button>
-          </div>
-        `;
-      } else {
-        vectorControlsHtml = `
-          <div style="margin-top:6px; display:flex; align-items:center; gap:8px;">
-            <button type="button" class="import-vector-btn" data-id="${escapeHtml(d.id)}" style="background:#2563eb; font-size:0.8rem; padding:4px 10px;">📥 Import Vector File (.vec.bin / .json)</button>
-            <input type="file" class="vector-file-input" data-id="${escapeHtml(d.id)}" accept=".json,.bin,.vec.bin" style="display:none;">
-          </div>
-        `;
+      if (isRerankerEnabled) {
+        if (d.hasPrecomputedVectors) {
+          vectorControlsHtml = `
+            <div style="margin-top:6px; display:flex; align-items:center; gap:8px;">
+              <span class="chip" style="background:#e6f4ea; color:#137333; font-weight:700;">⚡ Vector Cached</span>
+              <button type="button" class="remove-vector-btn" data-id="${escapeHtml(d.id)}" style="background:#8b261e; font-size:0.8rem; padding:4px 8px;">Remove Vectors</button>
+            </div>
+          `;
+        } else {
+          vectorControlsHtml = `
+            <div style="margin-top:6px; display:flex; align-items:center; gap:8px;">
+              <button type="button" class="import-vector-btn" data-id="${escapeHtml(d.id)}" style="background:#2563eb; font-size:0.8rem; padding:4px 10px;">📥 Import Vector File (.vec.bin / .json)</button>
+              <input type="file" class="vector-file-input" data-id="${escapeHtml(d.id)}" accept=".json,.bin,.vec.bin" style="display:none;">
+            </div>
+          `;
+        }
       }
 
       listHtml += `
@@ -497,8 +505,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     if (customResponseLanguageInput) customResponseLanguageInput.value = result.customResponseLanguage || '';
-    enableOnnxRerankerInput.checked = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : true;
-    if (enableWebGpuInput) enableWebGpuInput.checked = typeof result.enableWebGpu === 'boolean' ? result.enableWebGpu : true;
+    enableOnnxRerankerInput.checked = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : false;
+    if (enableOnnxRerankerInput) {
+      enableOnnxRerankerInput.addEventListener('change', () => {
+        chrome.storage.local.set({ enableOnnxReranker: enableOnnxRerankerInput.checked });
+        updateDictStatus();
+      });
+    }
+    if (enableWebGpuInput) {
+      enableWebGpuInput.checked = typeof result.enableWebGpu === 'boolean' ? result.enableWebGpu : false;
+      enableWebGpuInput.addEventListener('change', () => {
+        chrome.storage.local.set({ enableWebGpu: enableWebGpuInput.checked }, () => {
+          console.log('[Munmek Options] Enable WebGPU setting updated instantly to:', enableWebGpuInput.checked);
+        });
+      });
+    }
     if (useFullContextInput) useFullContextInput.checked = Boolean(result.useFullContext);
     if (enableCheaperSummaryModelInput) enableCheaperSummaryModelInput.checked = Boolean(result.enableCheaperSummaryModel);
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = result.cheaperSummaryModelId || 'gemini-flash-lite-latest';
@@ -524,8 +545,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (responseLanguageInput) responseLanguageInput.value = 'English';
     if (customResponseLanguageInput) customResponseLanguageInput.value = '';
     if (customLanguageContainer) customLanguageContainer.style.display = 'none';
-    enableOnnxRerankerInput.checked = true;
-    if (enableWebGpuInput) enableWebGpuInput.checked = true;
+    enableOnnxRerankerInput.checked = false;
+    if (enableWebGpuInput) enableWebGpuInput.checked = false;
+    updateDictStatus();
     if (useFullContextInput) useFullContextInput.checked = false;
     if (enableCheaperSummaryModelInput) enableCheaperSummaryModelInput.checked = false;
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = 'gemini-flash-lite-latest';
@@ -556,11 +578,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const ankiNoteType = ankiNoteTypeSelect.value || 'Basic';
     const ankiDefinitionField = ankiDefinitionFieldSelect.value || 'Back';
     updateFieldMappingJson();
-    if (!apiKey || !modelId) {
-      statusDiv.textContent = 'API Key and Model ID are required.';
-      statusDiv.className = 'error';
-      return;
-    }
     const updatedTrackedFields = {};
     if (cachedTrackedGeminiFields && typeof cachedTrackedGeminiFields === 'object') {
       Object.keys(cachedTrackedGeminiFields).forEach((key) => {
@@ -572,7 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
     cachedTrackedGeminiFields = updatedTrackedFields;
 
     const dataToSave = {
-      apiKey, modelId, aiPromptExtension, responseLanguage, customResponseLanguage, enableOnnxReranker, enableWebGpu, useFullContext, enableCheaperSummaryModel, cheaperSummaryModelId, selectedDictionaryId, modifierKey, tooltipFontSize, ankiConnectUrl, ankiDeckName, ankiNoteType,
+      apiKey, modelId: modelId || 'gemini-flash-lite-latest', aiPromptExtension, responseLanguage, customResponseLanguage, enableOnnxReranker, enableWebGpu, useFullContext, enableCheaperSummaryModel, cheaperSummaryModelId, selectedDictionaryId, modifierKey, tooltipFontSize, ankiConnectUrl, ankiDeckName, ankiNoteType,
       ankiFieldMapping: JSON.stringify(savedFieldMapping, null, 2), ankiDefinitionField, dictionaryOrder: currentDictOrder,
       trackedGeminiFields: updatedTrackedFields
     };
@@ -581,7 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
         statusDiv.textContent = `Error saving settings: ${chrome.runtime.lastError.message}`;
         statusDiv.className = 'error';
       } else {
-        statusDiv.textContent = 'Settings saved successfully!';
+        statusDiv.textContent = apiKey ? 'Settings saved successfully!' : 'Local settings saved! (Add a Gemini API Key to enable AI explanations).';
         statusDiv.className = 'success';
         updateAnkiModelFields();
       }

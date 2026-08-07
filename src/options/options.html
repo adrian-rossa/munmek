@@ -12,7 +12,7 @@
       <img src="../../assets/icon128.png" alt="Munmek Icon" style="width: 60px; height: 60px; object-fit: contain;">
       <div>
         <h1 style="margin: 0;">Munmek Settings</h1>
-        <p style="margin-top: 4px;">Keep the lookup focused on Korean. Munmek reads a local packaged dictionary first, then can ask Gemini for richer grammar or translation help on demand, and can export cards to AnkiConnect.</p>
+        <p style="margin-top: 4px;">Munmek (문맥) is a context-aware Korean popup-dictionary. It performs instant local morphological parsing and dictionary lookups with optional neural sense reranking, optional Ask Gemini AI context explanations, and 1-click Anki flashcard creation.</p>
       </div>
     </div>
 
@@ -75,11 +75,11 @@ Return JSON with "words_analysis": [{
         <h2>Pipeline & Context Summarization</h2>
         <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
           <input type="checkbox" id="enableOnnxReranker" style="width:auto;">
-          Enable Stage 2 Definition Reranking & Confidence Scores
+          Enable Stage 2 Definition Reranking & Confidence Scores (EXPERIMENTAL)
         </label>
         <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
           <input type="checkbox" id="enableWebGpu" style="width:auto;">
-          Enable WebGPU Hardware Acceleration for Stage 2 (Faster GPU inference)
+          Enable WebGPU Hardware Acceleration for Stage 2 (Experimental)
         </label>
         <div class="hint" style="margin-bottom:14px;">Leverages your GPU for Stage 2 neural embeddings when supported, accelerating multi-definition reranking from seconds down to milliseconds. Automatically falls back to CPU WASM if unavailable.</div>
 
@@ -112,21 +112,22 @@ Return JSON with "words_analysis": [{
           <button type="button" id="clearDictBtn" style="background:#8b261e;">Clear All Dictionaries</button>
         </div>
 
-        <div id="vectorImportExplanation" class="hint" style="margin-top: 12px; padding: 12px 14px; background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 12px; color: #1e40af;">
-          ⚡ <strong>Precomputed Vector Cache (.vec.bin / .json)</strong>: Precomputing vectors using GPU hardware accelerates sense reranking for offline lookups (<5ms). Use the step-by-step guide below to generate compact vector cache files in seconds.
-        </div>
-
-        <details style="margin-top: 10px; background: #faf8f5; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;">
-          <summary style="font-weight: 700; cursor: pointer; color: #2563eb;">📖 Step-by-Step Guide: GPU Vector Precomputation</summary>
-          <div style="margin-top: 10px; font-size: 0.88rem; line-height: 1.5; color: var(--ink);">
-            <ol style="margin-left: 18px; display: grid; gap: 8px;">
-              <li><strong>Install Dependencies</strong>: Open a terminal in the project directory and run:<br><code>pip install -r scripts/requirements.txt</code></li>
-              <li><strong>Run GPU Precomputation</strong>: Execute the script passing your dictionary zip file:<br><code>python scripts/precompute_definition_vectors.py "path/to/dictionary.zip"</code></li>
-              <li><strong>Import Vector Cache File</strong>: The script outputs <code>[dict_name]_vectors.vec.bin</code> in <code>scripts/</code> (~79 MB). Click <strong>"📥 Import Vector File"</strong> next to your installed dictionary below and pick the <code>.vec.bin</code> file!</li>
-            </ol>
-            <div style="margin-top: 8px; font-size: 0.82rem; color: var(--muted);">⚡ <em>Precomputed vectors work for both WASM CPU and WebGPU settings, bypassing live ONNX model evaluation for instant lookups (<5ms).</em></div>
+        <div id="vectorPrecomputationSection" style="display: none; margin-top: 12px;">
+          <div id="vectorImportExplanation" class="hint" style="padding: 12px 14px; background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 12px; color: #1e40af;">
+            ⚡ <strong>Precomputed Vector Cache (.vec.bin / .json)</strong>: Precomputing vectors using GPU hardware accelerates Stage 2 sense reranking for offline lookups (<5ms). Use the step-by-step guide below to generate compact vector cache files in seconds.
           </div>
-        </details>
+
+          <details style="margin-top: 10px; background: #faf8f5; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;">
+            <summary style="font-weight: 700; cursor: pointer; color: #2563eb;">📖 Step-by-Step Guide: GPU Vector Precomputation</summary>
+            <div style="margin-top: 10px; font-size: 0.88rem; line-height: 1.5; color: var(--ink);">
+              <ol style="margin-left: 18px; display: grid; gap: 8px;">
+                <li><strong>Install Dependencies</strong>: Open a terminal in the project directory and run:<br><code>pip install -r scripts/requirements.txt</code></li>
+                <li><strong>Run GPU Precomputation</strong>: Execute the script passing your dictionary zip file:<br><code>python scripts/precompute_definition_vectors.py "path/to/dictionary.zip"</code></li>
+                <li><strong>Import Vector Cache File</strong>: The script outputs <code>[dict_name]_vectors.vec.bin</code> in <code>scripts/</code> (~79 MB). Click <strong>"📥 Import Vector File"</strong> next to your installed dictionary below and pick the <code>.vec.bin</code> file!</li>
+              </ol>
+            </div>
+          </details>
+        </div>
 
         <div id="dictStatus" class="hint" style="margin-top: 10px; font-weight: 700;">IndexedDB Word Count: Loading...</div>
 

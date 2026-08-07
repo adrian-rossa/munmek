@@ -22,7 +22,7 @@
         try {
           let reranked = request.entries || [];
           if (global.OnnxReranker && typeof global.OnnxReranker.rerankDictionaryEntriesAsync === 'function') {
-            reranked = await global.OnnxReranker.rerankDictionaryEntriesAsync(reranked, request.sentenceContext || '', request.word || '');
+            reranked = await global.OnnxReranker.rerankDictionaryEntriesAsync(reranked, request.sentenceContext || '', request.word || '', request.enableWebGpu);
           } else if (global.OnnxReranker && typeof global.OnnxReranker.rerankDictionaryEntries === 'function') {
             reranked = global.OnnxReranker.rerankDictionaryEntries(reranked, request.sentenceContext || '', request.word || '');
           }

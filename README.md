@@ -16,11 +16,9 @@ Credits for the amazing [blog post](https://kimchi-reader.app/blog/int8-cpu-kore
   - **Tier 2 (Garu-ko WASM Analyzer)**: Runs a compact WebAssembly analyzer (~1.8 MB) inside a Manifest V3 Offscreen Document to extract base dictionary stems offline.
 - 🧠 **Multi-Stage Progressive Neural Reranker & Sense Preselector**:
   - **Stage 1 (KoELECTRA INT8 ONNX, ~14.3 MB)**: Runs pure Korean candidate deinflection lemma reranking inside a Manifest V3 Offscreen Document, ranking candidate stems (e.g. `[듣다]` vs `[들다]`, `[짓다]` vs `[지다]`).
-  - **Stage 2 (Multilingual E5 INT8 ONNX, ~118 MB)**: Asynchronously computes cross-lingual bi-encoder vector embeddings mapping Korean sentence context directly to multilanguage definitions for semantic sense disambiguation. Features **WebGPU Hardware Acceleration** with automatic WASM SIMD CPU fallback, **1-pass Batched Tensor Inference** (3.1x speedup on passage evaluation), and **Dynamic Sequence Length Truncation** (reducing matrix dimensions by up to 80%).
-  - **Calibrated Softmax Temperature Confidence Scores**: Uses Softmax Temperature Calibration ($T = 0.04$) so uniform scores display realistic ~58% confidence instead of false 95% certainty, while capping secondary entry confidence scores relative to the #1 context-matched entry.
-  - **Smart Performance Bypasses**: Bypasses Stage 2 ONNX reranking for single-definition lookups ($\le 1$ definition) or when Gemini has already analyzed the sentence, eliminating redundant CPU/GPU cycles.
-- 🤖 **On-Demand Gemini AI & Multi-Group Auto-Tab Switcher**: Click "Ask Gemini" inside the hover tooltip for context-aware grammar notes, clause analysis, and nuances. Gemini matching searches across all candidate chunk groups (`dictGroups`), matches base lemmas, filters out dummy conjugation stubs, and automatically switches the active candidate tab to the matched entry. If no local dictionary entry matches, Quick LLM Lookup automatically provides concise contextual definitions featuring a 1-click `+ Anki` button.
-- 📄 **Extension Pin Bar Context Extractor**: Extract active webpage article text or ASBPlayer video subtitles, automatically summarize them with Gemini for token efficiency, and attach them as additional background context for AI lookups.
+  - **Stage 2 (Multilingual E5 INT8 ONNX, ~118 MB, EXPERIMENTAL)**: Optionally computes cross-lingual bi-encoder vector embeddings mapping Korean sentence context directly to multilanguage definitions for semantic sense disambiguation. Features **WebGPU Hardware Acceleration** (experimental, disabled by default) with automatic WASM SIMD CPU fallback. You can also import precomputated vector files to speed up reranking further. Currently this feature needs more fine-tuning and is a work in progress.
+- 🤖 **On-Demand Gemini AI & Multi-Group Auto-Tab Switcher**: Click "Ask Gemini" inside the hover tooltip for context-aware grammar notes, clause analysis, and nuances. Gemini matching searches across all candidate chunk groups (`dictGroups`), matches base lemmas, filters out dummy conjugation stubs, and automatically switches the active candidate tab to the matched entry. If no local dictionary entry matches, Quick LLM Lookup automatically provides concise contextual definitions to fill the gaps.
+- 📄 **Extension Pin Bar Context Extractor**: Extract active webpage or subtitle content, automatically summarize them with Gemini, and attach them as additional background context for LLM lookups.
 - 🎴 **Interactive AnkiConnect Card Export**: One-click card export to Anki desktop with custom deck selection, note types, and dynamic field mapping (including custom LLM JSON fields). Supports creating new cards or updating the last created card (e.g., from ASBPlayer).
 
 ---
@@ -47,7 +45,7 @@ Right-click the Munmek toolbar icon and select **Options** (or open `options.htm
 
 1. **Gemini Setup**: Paste your API key into the **API Key** field.
 2. **Import Dictionaries**:
-   - Download a Yomichan-format KRDICT `.zip` archive (e.g. `KRDICT-KO-EN.zip`). You can find compatible dictionaries [here](https://github.com/Lyroxide/yomitan-ko-dic/releases).
+   - Download a Yomichan-format KRDICT `.zip` archive (e.g. `KO-EN.KRDICT.No.Examples.zip`). You can find compatible dictionaries [here](https://github.com/Lyroxide/yomitan-ko-dic/releases). In my testing I used the No Examples Versions.
    - Click **Import Term Bank / Zip** and select the `.zip` file.
    - Adjust dictionary priority order using **▲ Up** and **▼ Down** buttons.
 3. **AnkiConnect Setup**:
@@ -61,6 +59,7 @@ Right-click the Munmek toolbar icon and select **Options** (or open `options.htm
 Precomputing definition vectors locally using your computer's GPU speeds up sense reranking for offline lookups down to **<5ms**, completely bypassing live ONNX model evaluation (works for both WASM CPU and WebGPU settings).
 
 ### Step-by-Step Instructions:
+0. Navigate to the Extension-Folder using `cd`
 
 1. **Install Python dependencies**:
    ```bash
@@ -71,12 +70,12 @@ Precomputing definition vectors locally using your computer's GPU speeds up sens
    ```bash
    python scripts/precompute_definition_vectors.py "path/to/KRDICT-KO-EN.zip"
    ```
-   *(Uses DirectML GPU hardware acceleration to process 200k+ definitions in seconds)*
+   *(Uses DirectML GPU hardware acceleration)*
 
 3. **Import Vector Cache into Extension**:
    - The script outputs a compact binary file `[dict_name]_vectors.vec.bin` in `scripts/` (~79 MB).
    - In **Munmek Settings**, click **"📥 Import Vector File"** next to your installed dictionary and select the `.vec.bin` file.
-   - The badge **"⚡ Vector Cached"** will appear! Offline lookups will now perform sense reranking instantly (<5ms).
+   - The badge **"⚡ Vector Cached"** will appear! Offline lookups will now perform sense reranking more quickly.
 
 </details>
 

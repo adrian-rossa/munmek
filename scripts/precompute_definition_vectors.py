@@ -131,7 +131,7 @@ def split_embedded_definitions(def_list):
     for item in def_list:
         if not isinstance(item, str):
             continue
-        sub_parts = re.split(r'(?<=\D|^)(?=\b\d{1,2}[\.\)]\s+)', item)
+        sub_parts = re.split(r'(?=\b\d{1,2}[\.\)]\s+)', item)
         for part in sub_parts:
             for line in part.splitlines():
                 t = line.strip()
@@ -168,7 +168,7 @@ def extract_texts_from_yomichan(obj):
         for sub in obj: txts.extend(extract_texts_from_yomichan(sub))
     elif isinstance(obj, dict):
         if 'content' in obj: txts.extend(extract_texts_from_yomichan(obj['content']))
-    return split_embedded_definitions(txts)
+    return txts
 
 def main():
     onnx_model_path = os.path.join(OUTPUT_DIR, "multilingual_e5_small_int8.onnx")
@@ -219,7 +219,7 @@ def main():
                             for entry in data:
                                 if len(entry) > 5:
                                     extracted = extract_texts_from_yomichan(entry[5])
-                                    target_defs.extend(extracted)
+                                    target_defs.extend(split_embedded_definitions(extracted))
         elif input_path.endswith('.json'):
             with open(input_path, 'r', encoding='utf-8') as fp:
                 data = json.load(fp)
@@ -227,9 +227,9 @@ def main():
                     for entry in data:
                         if isinstance(entry, list) and len(entry) > 5:
                             extracted = extract_texts_from_yomichan(entry[5])
-                            target_defs.extend(extracted)
+                            target_defs.extend(split_embedded_definitions(extracted))
                         elif isinstance(entry, dict) and 'definitions' in entry:
-                            target_defs.extend(entry['definitions'])
+                            target_defs.extend(split_embedded_definitions(entry['definitions']))
 
     if not target_defs:
         # Scan dictionaries/ directory as default fallback
@@ -245,7 +245,7 @@ def main():
                             for entry in data:
                                 if len(entry) > 5:
                                     extracted = extract_texts_from_yomichan(entry[5])
-                                    target_defs.extend(extracted)
+                                    target_defs.extend(split_embedded_definitions(extracted))
                 except Exception as e:
                     print(f"Notice: Error reading {tf}: {e}")
 
@@ -309,7 +309,7 @@ def main():
             bin_fp.write(header_bytes)
             bin_fp.write(meta_bytes)
             for def_str in def_keys:
-                bin_fp.write(bytes(raw_vec_map[def_str]))
+                bin_fp.write(np.array(raw_vec_map[def_str], dtype=np.int8).tobytes())
 
         json_size_mb = os.path.getsize(output_vec_json_path) / (1024 * 1024)
         bin_size_mb = os.path.getsize(output_vec_bin_path) / (1024 * 1024)

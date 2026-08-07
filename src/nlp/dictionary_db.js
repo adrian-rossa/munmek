@@ -455,6 +455,7 @@
       await updateEntriesBatch(modified);
     }
     await markDictPrecomputed(dictId, false);
+    invalidateDictMapCache();
   }
 
   async function importPrecomputedVectorsForDict(dictId, vectorMap) {
@@ -484,6 +485,7 @@
 
     if (modified.length > 0) {
       await updateEntriesBatch(modified);
+      invalidateDictMapCache();
     }
     await markDictPrecomputed(dictId, true);
     return modified.length;
