@@ -65,7 +65,15 @@
     }
     let dictHtml = '';
 
-    if (Array.isArray(state.dictionaryEntries) && state.dictionaryEntries.length > 0) {
+    if (state.isStage2Loading) {
+      dictHtml = `
+        <div class="munmek-loading-card">
+          <div class="munmek-spinner"></div>
+          <div class="munmek-loading-text">Reranking dictionary definitions & calculating confidence scores...</div>
+          <div class="munmek-loading-subtext">Calculating contextual confidence scores in background</div>
+        </div>
+      `;
+    } else if (Array.isArray(state.dictionaryEntries) && state.dictionaryEntries.length > 0) {
       dictHtml = renderDictionaryEntriesGrouped(state.dictionaryEntries, state.dictionaryMatch || state.lookupReason, state);
     } else if (state.quickFallback) {
       dictHtml = renderGeminiFallbackEntry(state.quickFallback, state.word || state.dictionaryMatch);
@@ -96,7 +104,7 @@
       `<div class="title" style="display: flex; align-items: center; gap: 6px;">${iconHtml}<span>${escapeHtml(state.word || '...')}</span></div>`,
       dictHtml,
       candidateChipsHtml,
-      state.sentence ? `<div class="subtitle">${escapeHtml(truncateText(state.sentence, 180))}</div>` : '',
+      state.sentence ? `<div class="subtitle"><strong>Sentence:</strong> ${escapeHtml(truncateText(state.sentence, 180))}</div>` : '',
       renderActions(state, Boolean(analysis)),
       renderAnalysisSection(analysis, state),
       state.feedback ? `<div class="feedback ${state.feedbackType === 'error' ? 'error' : ''}" role="status" aria-live="polite">${escapeHtml(state.feedback)}</div>` : ''
@@ -176,6 +184,11 @@
 
   function splitEmbeddedDefinitions(defList, surfaceWord = '') {
     if (!Array.isArray(defList) || defList.length === 0) return [];
+
+    const hasEmbeddedNumbers = defList.some((item) => typeof item === 'string' && /(?:\b\d{1,2}[\.\)]\s+)/.test(item));
+    if (!hasEmbeddedNumbers) {
+      return defList.map(formatDefinitionText).filter((t) => Boolean(t));
+    }
 
     const allLines = [];
     defList.forEach((item) => {
@@ -277,26 +290,29 @@
     const matchedDefIdx = isCardMatched ? state.geminiMatchedDefIndex : null;
     const hasGeminiMatch = typeof matchedDefIdx === 'number';
 
-    const isKoElectraMatched = Boolean(entry && entry._koelectraMatched);
-    const hasKoElectraMatch = isKoElectraMatched || (entry && Array.isArray(entry._defConfidenceScores) && entry._defConfidenceScores.length > 0);
-    const koelectraMatchedDefIdx = isKoElectraMatched ? (typeof entry._bestDefIndex === 'number' ? entry._bestDefIndex : 0) : 0;
-
-    const defConfScores = Array.isArray(entry._defConfidenceScores) ? entry._defConfidenceScores : [];
+    const isStage2Enabled = state.isStage2Enabled !== false;
+    const isKoElectraMatched = isStage2Enabled && Boolean(entry && entry._koelectraMatched);
+    const rawBestIdx = (isStage2Enabled && typeof entry._bestDefIndex === 'number') ? entry._bestDefIndex : 0;
+    const koelectraMatchedDefIdx = Math.min(Math.max(0, rawBestIdx), Math.max(0, definitions.length - 1));
+    const defConfScores = isStage2Enabled && Array.isArray(entry._defConfidenceScores) ? entry._defConfidenceScores : [];
 
     const selectedIndexKey = `selectedDefIndex_${itemIndex}`;
     let selectedIndex = 0;
-    if (state && typeof state[selectedIndexKey] === 'number') {
+    if (state.userSelectedDef && typeof state[selectedIndexKey] === 'number') {
       selectedIndex = state[selectedIndexKey];
     } else if (hasGeminiMatch) {
       selectedIndex = matchedDefIdx;
-    } else if (isKoElectraMatched) {
+    } else if (isStage2Enabled && typeof entry._bestDefIndex === 'number') {
       selectedIndex = koelectraMatchedDefIdx;
+    } else if (typeof state[selectedIndexKey] === 'number') {
+      selectedIndex = state[selectedIndexKey];
     }
     const validIndex = (selectedIndex >= 0 && selectedIndex < definitions.length) ? selectedIndex : 0;
     const selectedDef = definitions[validIndex] || '';
 
-    const activeConfScore = defConfScores[validIndex] || entry._confidenceScore || '75%';
-    const bestConfScore = defConfScores[koelectraMatchedDefIdx] || entry._confidenceScore || '75%';
+    const activeConfScore = isStage2Enabled ? (defConfScores[validIndex] || entry._confidenceScore || null) : null;
+    const bestConfScore = isStage2Enabled ? (defConfScores[koelectraMatchedDefIdx] || entry._confidenceScore || null) : null;
+    const hasKoElectraMatch = isStage2Enabled && isKoElectraMatched && Boolean(activeConfScore || bestConfScore);
 
     const chips = [entry.pos, entry.type, matchLabel].filter(Boolean).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join('');
 
@@ -324,7 +340,7 @@
             const isActive = idx === validIndex;
             const isMatchedTab = (isCardMatched && state.geminiMatchedDefIndex === idx) || (isKoElectraMatched && koelectraMatchedDefIdx === idx);
             const shortText = truncateText(stripHtml(def), 18);
-            const tabScoreStr = defConfScores[idx] ? ` (${defConfScores[idx]})` : '';
+            const tabScoreStr = (isStage2Enabled && defConfScores[idx]) ? ` (${defConfScores[idx]})` : '';
             return `<button type="button" class="def-tab" data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid ${isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4')}; background: ${isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff')}; color: ${isActive ? '#fff' : '#4f463a'};">Def ${idx + 1}: ${escapeHtml(shortText)}${tabScoreStr}${isMatchedTab ? ' ✨' : ''}</button>`;
           }).join('')}
          </div>`
@@ -363,21 +379,35 @@
     `;
   }
 
-  function renderGeminiFallbackEntry(norm, word) {
+  function renderGeminiFallbackEntry(rawNorm, word) {
+    const norm = normalizeGeminiAnalysis(rawNorm) || rawNorm || {};
+    const defText = formatDefinitionText(
+      norm.translation ||
+      (Array.isArray(norm.definitions) ? norm.definitions.join('; ') : norm.definition) ||
+      (Array.isArray(rawNorm?.definitions) ? rawNorm.definitions.join('; ') : rawNorm?.definition) ||
+      'No definition available.'
+    );
+    const grammarText = norm.grammar || norm.grammar_notes || rawNorm?.grammar_notes || '';
+    const hanjaText = norm.hanja || rawNorm?.hanja || '';
+    const posText = norm.pos || rawNorm?.pos || '';
+
     return `
       <div class="section entry-box" style="border-left: 4px solid #d97706; padding-left: 12px; background: #fffbeb; border-radius: 8px; border: 1px solid #fef3c7; margin-bottom: 8px;">
         <div class="entry-head">
-          <div class="entry-word">${escapeHtml(word || '')}</div>
+          <div class="entry-word">${escapeHtml(word || '')} ${posText ? `<span class="muted" style="font-size:0.82em;">(${escapeHtml(posText)})</span>` : ''}</div>
         </div>
         <div class="chips"><span class="chip" style="background:#d97706; color:#fff; font-weight:700;">Quick LLM Lookup</span></div>
         <div class="section">
-          <div class="label">Definition / Translation</div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div class="label" style="margin: 0;">Definition / Translation</div>
+            <button type="button" class="chip" data-action="anki-llm" title="Add this Quick LLM definition card to Anki" style="cursor: pointer; font-size: 0.76em; padding: 2px 8px; border: none; background: #d97706; color: #fff; border-radius: 6px;">+ Anki</button>
+          </div>
           <div style="font-size: 0.94em; font-weight: 500; color: #1e1b16; background: #fff; border: 1px solid #fcd34d; border-radius: 8px; padding: 10px 12px; line-height: 1.5; white-space: pre-line;">
-            ${escapeHtml(formatDefinitionText(norm.translation || 'No definition available.'))}
+            ${escapeHtml(defText)}
           </div>
         </div>
-        ${norm.hanja ? `<div class="section"><div class="label">Hanja</div><div>${escapeHtml(norm.hanja)}</div></div>` : ''}
-        ${norm.grammar ? `<div class="section"><div class="label">Grammar Notes</div><div>${escapeHtml(norm.grammar)}</div></div>` : ''}
+        ${hanjaText ? `<div class="section"><div class="label">Hanja</div><div>${escapeHtml(hanjaText)}</div></div>` : ''}
+        ${grammarText ? `<div class="section"><div class="label">Grammar Notes</div><div>${escapeHtml(grammarText)}</div></div>` : ''}
       </div>
     `;
   }

@@ -18,6 +18,7 @@
   let currentModifierKey = 'Shift';
   let currentSelectedDictionaryId = 'all';
   let currentTooltipFontSize = 15;
+  let enableStage2Reranker = true;
   const subtitleHistoryBuffer = [];
   let _asbObserver = null;
   let _asbContainerEl = null;
@@ -87,11 +88,12 @@
     _asbScanInterval = setInterval(findAndObserveAsbPlayer, 3000);
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize', 'extensionEnabled'], (res) => {
+      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize', 'extensionEnabled', 'enableOnnxReranker'], (res) => {
         if (res.modifierKey !== undefined) currentModifierKey = res.modifierKey;
         if (res.selectedDictionaryId) currentSelectedDictionaryId = res.selectedDictionaryId;
         if (res.tooltipFontSize) currentTooltipFontSize = Number(res.tooltipFontSize) || 15;
         if (res.extensionEnabled !== undefined) extensionEnabled = Boolean(res.extensionEnabled);
+        if (res.enableOnnxReranker !== undefined) enableStage2Reranker = Boolean(res.enableOnnxReranker);
       });
 
       if (chrome.storage.onChanged) {
@@ -100,6 +102,9 @@
             if (changes.extensionEnabled) {
               extensionEnabled = Boolean(changes.extensionEnabled.newValue);
               if (!extensionEnabled) scheduleHideTooltip();
+            }
+            if (changes.enableOnnxReranker !== undefined) {
+              enableStage2Reranker = Boolean(changes.enableOnnxReranker.newValue);
             }
             if (changes.modifierKey) currentModifierKey = changes.modifierKey.newValue || 'Shift';
             if (changes.selectedDictionaryId) currentSelectedDictionaryId = changes.selectedDictionaryId.newValue || 'all';
@@ -411,6 +416,8 @@
       tooltipFontSize: currentTooltipFontSize,
       quickFallback: null,
       userSelectedDef: false,
+      isStage2Enabled: enableStage2Reranker,
+      isStage2Loading: false,
       feedback: '',
       feedbackType: 'info'
     };
@@ -423,6 +430,8 @@
     }
     return [{ text: normalizeText(surface), reason: 'surface form', score: 100 }];
   }
+
+  const stage2RerankCache = new Map();
 
   async function triggerIndexedDbLookup(state) {
     if (!state || !state.word) return;
@@ -443,34 +452,52 @@
           if (res && res.hits && res.hits.length > 0) {
             if (currentHoverState && currentHoverState.word === state.word) {
               let sortedHits = sortHitsByBaseForm(res.hits);
-              try {
-                const fullContextText = [state.sentence, state.prevSentence, state.prevSentence2].filter(Boolean).join(' ');
-                if (typeof window.DictionaryReranker !== 'undefined' && typeof window.DictionaryReranker.rerankDictionaryEntries === 'function') {
-                  sortedHits = window.DictionaryReranker.rerankDictionaryEntries(sortedHits, fullContextText, candidate.text);
-                } else if (typeof window.OnnxReranker !== 'undefined' && typeof window.OnnxReranker.rerankDictionaryEntries === 'function') {
-                  sortedHits = window.OnnxReranker.rerankDictionaryEntries(sortedHits, fullContextText, candidate.text);
-                }
-              } catch (rerankErr) {
-                console.warn('[Munmek] Rerank fallback notice:', rerankErr);
-              }
+
               currentHoverState.dictionaryEntries = sortedHits;
               currentHoverState.dictionaryEntry = sortedHits[0];
               currentHoverState.dictionaryMatch = candidate.text;
               currentHoverState.selectedGroupIndex = 0;
               currentHoverState.quickFallback = null;
+              currentHoverState.koelectraMatchedItemIndex = null;
+              currentHoverState.koelectraMatchedDefIndex = null;
+              currentHoverState.geminiMatchedItemIndex = null;
+              currentHoverState.geminiMatchedDefIndex = null;
               currentHoverState.lookupReason = `IndexedDB Surface Match (${sortedHits[0].dictTitle || 'Local'})`;
 
-              const matchedEntryIdx = sortedHits.findIndex(e => e && e._koelectraMatched);
-              if (matchedEntryIdx >= 0) {
-                const matchedEntry = sortedHits[matchedEntryIdx];
-                currentHoverState.koelectraMatchedItemIndex = matchedEntryIdx;
-                currentHoverState.koelectraMatchedDefIndex = matchedEntry._bestDefIndex || 0;
-                currentHoverState[`selectedDefIndex_${matchedEntryIdx}`] = matchedEntry._bestDefIndex || 0;
-                currentHoverState.selectedDefinitionIndex = matchedEntry._bestDefIndex || 0;
+              if (enableStage2Reranker) {
+                const cacheKey = `${candidate.text}__${state.sentenceKey}`;
+                const cachedRes = stage2RerankCache.get(cacheKey);
+                if (cachedRes && Array.isArray(cachedRes.entries) && cachedRes.entries.length > 0) {
+                  currentHoverState.isStage2Enabled = true;
+                  currentHoverState.isStage2Loading = false;
+                  currentHoverState.dictionaryEntries = cachedRes.entries;
+                  currentHoverState.dictionaryEntry = cachedRes.entries[0];
+                  if (typeof cachedRes.koelectraMatchedItemIndex === 'number') {
+                    currentHoverState.koelectraMatchedItemIndex = cachedRes.koelectraMatchedItemIndex;
+                    currentHoverState.koelectraMatchedDefIndex = cachedRes.koelectraMatchedDefIndex;
+                    currentHoverState[`selectedDefIndex_${cachedRes.koelectraMatchedItemIndex}`] = cachedRes.koelectraMatchedDefIndex;
+                    currentHoverState.selectedDefinitionIndex = cachedRes.koelectraMatchedDefIndex;
+                  }
+                  rerenderCurrentTooltip();
+                } else {
+                  currentHoverState.isStage2Enabled = true;
+                  currentHoverState.isStage2Loading = true;
+                  rerenderCurrentTooltip();
+                  triggerDictionaryEntryReranking(state, sortedHits, candidate.text);
+                }
+              } else {
+                currentHoverState.isStage2Enabled = false;
+                currentHoverState.isStage2Loading = false;
+                sortedHits.forEach((e) => {
+                  if (e) {
+                    delete e._confidenceScore;
+                    delete e._defConfidenceScores;
+                    delete e._koelectraMatched;
+                    delete e._bestDefIndex;
+                  }
+                });
+                rerenderCurrentTooltip();
               }
-
-              rerenderCurrentTooltip();
-              triggerDictionaryEntryReranking(state, sortedHits, candidate.text);
             }
             return;
           }
@@ -487,39 +514,59 @@
           if (res && res.hits && res.hits.length > 0) {
             if (currentHoverState && currentHoverState.word === state.word) {
               let sortedHits = sortHitsByBaseForm(res.hits);
-              try {
-                if (typeof window.DictionaryReranker !== 'undefined' && typeof window.DictionaryReranker.rerankDictionaryEntries === 'function') {
-                  sortedHits = window.DictionaryReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
-                } else if (typeof window.OnnxReranker !== 'undefined' && typeof window.OnnxReranker.rerankDictionaryEntries === 'function') {
-                  sortedHits = window.OnnxReranker.rerankDictionaryEntries(sortedHits, state.sentence, candidate.text);
-                }
-              } catch (rerankErr) {
-                console.warn('[Munmek] Rerank fallback notice:', rerankErr);
-              }
+
               currentHoverState.dictionaryEntries = sortedHits;
               currentHoverState.dictionaryEntry = sortedHits[0];
               currentHoverState.dictionaryMatch = candidate.text;
               currentHoverState.selectedGroupIndex = 0;
               currentHoverState.quickFallback = null;
+              currentHoverState.koelectraMatchedItemIndex = null;
+              currentHoverState.koelectraMatchedDefIndex = null;
+              currentHoverState.geminiMatchedItemIndex = null;
+              currentHoverState.geminiMatchedDefIndex = null;
               currentHoverState.lookupReason = `IndexedDB Base Match (${sortedHits[0].dictTitle || 'Local'})`;
 
-              const matchedEntryIdx = sortedHits.findIndex(e => e && e._koelectraMatched);
-              if (matchedEntryIdx >= 0) {
-                const matchedEntry = sortedHits[matchedEntryIdx];
-                currentHoverState.koelectraMatchedItemIndex = matchedEntryIdx;
-                currentHoverState.koelectraMatchedDefIndex = matchedEntry._bestDefIndex || 0;
-                currentHoverState[`selectedDefIndex_${matchedEntryIdx}`] = matchedEntry._bestDefIndex || 0;
-                currentHoverState.selectedDefinitionIndex = matchedEntry._bestDefIndex || 0;
+              if (enableStage2Reranker) {
+                const cacheKey = `${candidate.text}__${state.sentenceKey}`;
+                const cachedRes = stage2RerankCache.get(cacheKey);
+                if (cachedRes && Array.isArray(cachedRes.entries) && cachedRes.entries.length > 0) {
+                  currentHoverState.isStage2Enabled = true;
+                  currentHoverState.isStage2Loading = false;
+                  currentHoverState.dictionaryEntries = cachedRes.entries;
+                  currentHoverState.dictionaryEntry = cachedRes.entries[0];
+                  if (typeof cachedRes.koelectraMatchedItemIndex === 'number') {
+                    currentHoverState.koelectraMatchedItemIndex = cachedRes.koelectraMatchedItemIndex;
+                    currentHoverState.koelectraMatchedDefIndex = cachedRes.koelectraMatchedDefIndex;
+                    currentHoverState[`selectedDefIndex_${cachedRes.koelectraMatchedItemIndex}`] = cachedRes.koelectraMatchedDefIndex;
+                    currentHoverState.selectedDefinitionIndex = cachedRes.koelectraMatchedDefIndex;
+                  }
+                  rerenderCurrentTooltip();
+                } else {
+                  currentHoverState.isStage2Enabled = true;
+                  currentHoverState.isStage2Loading = true;
+                  rerenderCurrentTooltip();
+                  triggerDictionaryEntryReranking(state, sortedHits, candidate.text);
+                }
+              } else {
+                currentHoverState.isStage2Enabled = false;
+                currentHoverState.isStage2Loading = false;
+                sortedHits.forEach((e) => {
+                  if (e) {
+                    delete e._confidenceScore;
+                    delete e._defConfidenceScores;
+                    delete e._koelectraMatched;
+                    delete e._bestDefIndex;
+                  }
+                });
+                rerenderCurrentTooltip();
               }
-
-              rerenderCurrentTooltip();
-              triggerDictionaryEntryReranking(state, sortedHits, candidate.text);
             }
             return;
           }
         }
 
         if (currentHoverState && currentHoverState.word === state.word && (!currentHoverState.dictionaryEntries || currentHoverState.dictionaryEntries.length === 0)) {
+          currentHoverState.isStage2Loading = false;
           currentHoverState.lookupReason = 'No offline dictionary match found. Running Quick LLM Lookup...';
           rerenderCurrentTooltip();
           triggerQuickGeminiFallback(currentHoverState);
@@ -530,38 +577,81 @@
     }
   }
 
+  let rerankDebounceTimer = null;
+
   function triggerDictionaryEntryReranking(state, entries, candidateWord) {
-    if (!state || !entries || entries.length === 0 || !state.sentence) return;
+    if (!state || !entries || entries.length === 0 || !state.sentence) {
+      if (currentHoverState) {
+        currentHoverState.isStage2Loading = false;
+        rerenderCurrentTooltip();
+      }
+      return;
+    }
 
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-      chrome.runtime.sendMessage(
-        {
-          type: 'rerankDictionaryEntries',
-          entries: entries,
-          sentenceContext: state.sentence,
-          word: candidateWord || state.word
-        },
-        (response) => {
-          if (response && response.ok && Array.isArray(response.entries) && response.entries.length > 0 && !response.disabled) {
-            if (currentHoverState && currentHoverState.word === state.word) {
-              const rerankedEntries = response.entries;
-              currentHoverState.dictionaryEntries = rerankedEntries;
-              currentHoverState.dictionaryEntry = rerankedEntries[0];
+    if (rerankDebounceTimer) {
+      clearTimeout(rerankDebounceTimer);
+    }
 
-              const matchedEntryIdx = rerankedEntries.findIndex(e => e && e._koelectraMatched);
-              if (matchedEntryIdx >= 0) {
-                const matchedEntry = rerankedEntries[matchedEntryIdx];
-                currentHoverState.koelectraMatchedItemIndex = matchedEntryIdx;
-                currentHoverState.koelectraMatchedDefIndex = matchedEntry._bestDefIndex || 0;
-                currentHoverState[`selectedDefIndex_${matchedEntryIdx}`] = matchedEntry._bestDefIndex || 0;
-                currentHoverState.selectedDefinitionIndex = matchedEntry._bestDefIndex || 0;
+    const hoverId = Date.now();
+    state._hoverReqId = hoverId;
+    if (currentHoverState) {
+      currentHoverState._hoverReqId = hoverId;
+    }
+
+    rerankDebounceTimer = setTimeout(() => {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        const tSent = Date.now();
+        const tPerfStart = performance.now();
+
+        chrome.runtime.sendMessage(
+          {
+            type: 'rerankDictionaryEntries',
+            entries: entries,
+            sentenceContext: state.sentence,
+            word: candidateWord || state.word,
+            t_sent: tSent
+          },
+          (response) => {
+            const tPerfEnd = performance.now();
+            const totalRoundtripMs = (tPerfEnd - tPerfStart).toFixed(2);
+
+            if (currentHoverState && (currentHoverState._hoverReqId === hoverId || currentHoverState.word === state.word)) {
+              currentHoverState.isStage2Loading = false;
+              if (response && response.ok && Array.isArray(response.entries) && response.entries.length > 0 && !response.disabled) {
+                const rerankedEntries = response.entries;
+                console.log(`[Munmek Content Timer] Stage 2 Neural Rerank completed in ${totalRoundtripMs} ms (Offscreen: ${response.offscreenMs || '?'} ms, Query: ${response.queryMs || '?'} ms, Passages: ${response.passageCount || 0} passages [${response.precomputedHits || 0} precomputed] in ${response.passageMs || '?'} ms). Top entry: ${rerankedEntries[0]?.surface}, Def Tab: ${(rerankedEntries[0]?._bestDefIndex ?? 0) + 1}, Score: ${rerankedEntries[0]?._confidenceScore}`);
+                currentHoverState.dictionaryEntries = rerankedEntries;
+                currentHoverState.dictionaryEntry = rerankedEntries[0];
+
+                let koelectraMatchedItemIndex = 0;
+                let koelectraMatchedDefIndex = rerankedEntries[0]?._bestDefIndex || 0;
+
+                const topEntry = rerankedEntries[0];
+                if (topEntry && typeof topEntry._bestDefIndex === 'number') {
+                  currentHoverState.koelectraMatchedItemIndex = 0;
+                  currentHoverState.koelectraMatchedDefIndex = topEntry._bestDefIndex;
+                  if (!currentHoverState.userSelectedDef) {
+                    currentHoverState[`selectedDefIndex_0`] = topEntry._bestDefIndex;
+                    currentHoverState.selectedDefinitionIndex = topEntry._bestDefIndex;
+                  }
+                }
+
+                const cacheKey = `${candidateWord || state.word}__${state.sentenceKey}`;
+                stage2RerankCache.set(cacheKey, {
+                  entries: rerankedEntries,
+                  koelectraMatchedItemIndex,
+                  koelectraMatchedDefIndex
+                });
               }
               rerenderCurrentTooltip();
             }
           }
-        }
-      );
-    }
+        );
+      } else if (currentHoverState) {
+        currentHoverState.isStage2Loading = false;
+        rerenderCurrentTooltip();
+      }
+    }, 80);
   }
 
   function triggerProgressiveReranking(state) {
@@ -617,10 +707,29 @@
           dictId: currentSelectedDictionaryId
         }, (res) => {
           if (res && res.hits && res.hits.length > 0 && currentHoverState) {
-            currentHoverState.dictionaryEntries = res.hits;
-            currentHoverState.dictionaryEntry = res.hits[0];
+            let sortedHits = sortHitsByBaseForm(res.hits);
+            currentHoverState.dictionaryEntries = sortedHits;
+            currentHoverState.dictionaryEntry = sortedHits[0];
             currentHoverState.lookupReason = `Selected Candidate (${res.hits[0].dictTitle || 'Local'})`;
-            rerenderCurrentTooltip();
+
+            if (enableStage2Reranker) {
+              currentHoverState.isStage2Enabled = true;
+              currentHoverState.isStage2Loading = true;
+              rerenderCurrentTooltip();
+              triggerDictionaryEntryReranking(currentHoverState, sortedHits, selectedCandidate);
+            } else {
+              currentHoverState.isStage2Enabled = false;
+              currentHoverState.isStage2Loading = false;
+              sortedHits.forEach((e) => {
+                if (e) {
+                  delete e._confidenceScore;
+                  delete e._defConfidenceScores;
+                  delete e._koelectraMatched;
+                  delete e._bestDefIndex;
+                }
+              });
+              rerenderCurrentTooltip();
+            }
           } else {
             chrome.runtime.sendMessage({
               type: 'dictionaryLookup',
@@ -629,11 +738,31 @@
               dictId: currentSelectedDictionaryId
             }, (resBase) => {
               if (resBase && resBase.hits && resBase.hits.length > 0 && currentHoverState) {
-                currentHoverState.dictionaryEntries = resBase.hits;
-                currentHoverState.dictionaryEntry = resBase.hits[0];
+                let sortedHits = sortHitsByBaseForm(resBase.hits);
+                currentHoverState.dictionaryEntries = sortedHits;
+                currentHoverState.dictionaryEntry = sortedHits[0];
                 currentHoverState.lookupReason = `Selected Candidate (${resBase.hits[0].dictTitle || 'Local'})`;
-                rerenderCurrentTooltip();
+
+                if (enableStage2Reranker) {
+                  currentHoverState.isStage2Enabled = true;
+                  currentHoverState.isStage2Loading = true;
+                  rerenderCurrentTooltip();
+                  triggerDictionaryEntryReranking(currentHoverState, sortedHits, selectedCandidate);
+                } else {
+                  currentHoverState.isStage2Enabled = false;
+                  currentHoverState.isStage2Loading = false;
+                  sortedHits.forEach((e) => {
+                    if (e) {
+                      delete e._confidenceScore;
+                      delete e._defConfidenceScores;
+                      delete e._koelectraMatched;
+                      delete e._bestDefIndex;
+                    }
+                  });
+                  rerenderCurrentTooltip();
+                }
               } else if (currentHoverState) {
+                currentHoverState.isStage2Loading = false;
                 currentHoverState.dictionaryEntries = [];
                 currentHoverState.dictionaryEntry = null;
                 currentHoverState.lookupReason = `Selected candidate "${selectedCandidate}" (Running Quick LLM Lookup...)`;
@@ -732,17 +861,22 @@
 
   function triggerQuickGeminiFallback(state) {
     if (!state || !state.word || pendingQuickFallbacks.has(state.word)) return;
-    const bestCandidate = (state.candidateList && state.candidateList[0]) ? state.candidateList[0].text : state.word;
-    pendingQuickFallbacks.set(state.word, true);
+    const targetWord = state.word;
+    pendingQuickFallbacks.set(targetWord, true);
 
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
       chrome.runtime.sendMessage(
         {
           type: 'quickGeminiFallback',
-          data: { word: bestCandidate, sentence: state.sentence }
+          data: {
+            word: targetWord,
+            sentence: state.sentence,
+            prevSentence: state.prevSentence,
+            prevSentence2: state.prevSentence2
+          }
         },
         (res) => {
-          pendingQuickFallbacks.delete(state.word);
+          pendingQuickFallbacks.delete(targetWord);
           if (chrome.runtime.lastError || !res || res.error) {
             if (currentHoverState && currentHoverState.word === state.word) {
               let errMsg = res?.error || chrome.runtime.lastError?.message || 'Quick LLM Lookup failed.';

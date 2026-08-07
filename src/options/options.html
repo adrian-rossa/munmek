@@ -75,9 +75,9 @@ Return JSON with "words_analysis": [{
         <h2>Pipeline & Context Summarization</h2>
         <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
           <input type="checkbox" id="enableOnnxReranker" style="width:auto;">
-          Enable ONNX Context Reranker for Homonym Disambiguation
+          Enable Stage 2 Definition Reranking & Confidence Scores
         </label>
-        <div class="hint" style="margin-bottom:14px;">Disambiguates homonym candidate lemmas (e.g. <code>들어요</code> → <code>듣다</code> vs. <code>들다</code>) based on sentence context using local KoELECTRA INT8 ONNX model inference.</div>
+        <div class="hint" style="margin-bottom:14px;">Reranks dictionary definitions and computes contextual confidence scores using the local neural model. <strong>Note: Enabling this costs more CPU/RAM performance during word lookups.</strong></div>
 
         <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
           <input type="checkbox" id="useFullContext" style="width:auto;">

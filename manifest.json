@@ -52,6 +52,7 @@
         "korean_words.json",
         "src/offscreen/offscreen.html",
         "src/offscreen/offscreen.js",
+        "src/offscreen/offscreen_bridge.js",
         "lib/garu/*",
         "lib/onnx/*",
         "lib/models/*"

@@ -67,4 +67,10 @@ describe('Korean Lemmatizer Rule Engine', () => {
     const results = globalThis.KoreanLemmatizer.stripParticles('거예요');
     expect(results.map(r => r.stem)).toContain('거');
   });
+
+  it('deconjugates informal connective -아 endings (e.g. 작아 -> 작다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('작아');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('작다');
+  });
 });
