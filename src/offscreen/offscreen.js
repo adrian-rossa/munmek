@@ -150,7 +150,8 @@ globalThis.handleOffscreenAnalyzeKorean = handleOffscreenAnalyzeKorean;
           queryMs: timingInfo.queryMs || 0,
           passageMs: timingInfo.passageMs || 0,
           passageCount: timingInfo.passageCount || 0,
-          precomputedHits: timingInfo.precomputedHits || 0
+          precomputedHits: timingInfo.precomputedHits || 0,
+          activeProvider: timingInfo.activeProvider || 'WASM'
         });
       } catch (err) {
         sendResponse({ ok: false, error: err.message });

@@ -398,7 +398,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  chrome.storage.local.get(['apiKey', 'modelId', 'aiPromptExtension', 'responseLanguage', 'customResponseLanguage', 'enableOnnxReranker', 'useFullContext', 'enableCheaperSummaryModel', 'cheaperSummaryModelId', 'selectedDictionaryId', 'modifierKey', 'tooltipFontSize', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'trackedGeminiFields'], (result) => {
+  const enableWebGpuInput = document.getElementById('enableWebGpu');
+
+  chrome.storage.local.get(['apiKey', 'modelId', 'aiPromptExtension', 'responseLanguage', 'customResponseLanguage', 'enableOnnxReranker', 'enableWebGpu', 'useFullContext', 'enableCheaperSummaryModel', 'cheaperSummaryModelId', 'selectedDictionaryId', 'modifierKey', 'tooltipFontSize', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'trackedGeminiFields'], (result) => {
     if (result.trackedGeminiFields) cachedTrackedGeminiFields = result.trackedGeminiFields;
     if (result.apiKey) apiKeyInput.value = result.apiKey;
     modelIdInput.value = result.modelId || 'gemini-flash-lite-latest';
@@ -411,6 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (customResponseLanguageInput) customResponseLanguageInput.value = result.customResponseLanguage || '';
     enableOnnxRerankerInput.checked = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : true;
+    if (enableWebGpuInput) enableWebGpuInput.checked = typeof result.enableWebGpu === 'boolean' ? result.enableWebGpu : true;
     if (useFullContextInput) useFullContextInput.checked = Boolean(result.useFullContext);
     if (enableCheaperSummaryModelInput) enableCheaperSummaryModelInput.checked = Boolean(result.enableCheaperSummaryModel);
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = result.cheaperSummaryModelId || 'gemini-flash-lite-latest';
@@ -437,6 +440,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (customResponseLanguageInput) customResponseLanguageInput.value = '';
     if (customLanguageContainer) customLanguageContainer.style.display = 'none';
     enableOnnxRerankerInput.checked = true;
+    if (enableWebGpuInput) enableWebGpuInput.checked = true;
     if (useFullContextInput) useFullContextInput.checked = false;
     if (enableCheaperSummaryModelInput) enableCheaperSummaryModelInput.checked = false;
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = 'gemini-flash-lite-latest';
@@ -455,6 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const responseLanguage = responseLanguageInput ? responseLanguageInput.value : 'English';
     const customResponseLanguage = customResponseLanguageInput ? customResponseLanguageInput.value.trim() : '';
     const enableOnnxReranker = enableOnnxRerankerInput.checked;
+    const enableWebGpu = enableWebGpuInput ? enableWebGpuInput.checked : true;
     const useFullContext = useFullContextInput ? useFullContextInput.checked : false;
     const enableCheaperSummaryModel = enableCheaperSummaryModelInput ? enableCheaperSummaryModelInput.checked : false;
     const cheaperSummaryModelId = cheaperSummaryModelIdInput ? cheaperSummaryModelIdInput.value.trim() : 'gemini-flash-lite-latest';
@@ -482,7 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
     cachedTrackedGeminiFields = updatedTrackedFields;
 
     const dataToSave = {
-      apiKey, modelId, aiPromptExtension, responseLanguage, customResponseLanguage, enableOnnxReranker, useFullContext, enableCheaperSummaryModel, cheaperSummaryModelId, selectedDictionaryId, modifierKey, tooltipFontSize, ankiConnectUrl, ankiDeckName, ankiNoteType,
+      apiKey, modelId, aiPromptExtension, responseLanguage, customResponseLanguage, enableOnnxReranker, enableWebGpu, useFullContext, enableCheaperSummaryModel, cheaperSummaryModelId, selectedDictionaryId, modifierKey, tooltipFontSize, ankiConnectUrl, ankiDeckName, ankiNoteType,
       ankiFieldMapping: JSON.stringify(savedFieldMapping, null, 2), ankiDefinitionField, dictionaryOrder: currentDictOrder,
       trackedGeminiFields: updatedTrackedFields
     };

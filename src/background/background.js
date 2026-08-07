@@ -35,6 +35,7 @@ chrome.runtime.onInstalled.addListener(() => {
     const defaults = {};
     if (!result.modelId) defaults.modelId = DEFAULT_MODEL_ID;
     if (typeof result.enableOnnxReranker !== 'boolean') defaults.enableOnnxReranker = true;
+    if (typeof result.enableWebGpu !== 'boolean') defaults.enableWebGpu = true;
     if (!result.ankiConnectUrl) defaults.ankiConnectUrl = 'http://127.0.0.1:8765';
     if (!result.ankiDeckName) defaults.ankiDeckName = 'Korean';
     if (!result.ankiNoteType) defaults.ankiNoteType = 'Basic';
@@ -262,7 +263,8 @@ function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, se
       const bgTotalMs = tBgFinished - tBgRecv;
 
       if (response && response.ok) {
-        console.log(`[Munmek Background Timer] Stage 2 Rerank for '${word}' completed in ${bgTotalMs} ms (Offscreen: ${response.offscreenMs || '?'} ms, Query: ${response.queryMs || '?'} ms, ${response.passageCount || 0} passages [${response.precomputedHits || 0} precomputed] in ${response.passageMs || '?'} ms)`);
+        const reasonStr = response.providerReason ? ` | Note: ${response.providerReason}` : '';
+        console.log(`[Munmek Background Timer] Stage 2 Rerank for '${word}' completed in ${bgTotalMs} ms [Provider: ${response.activeProvider || 'WASM'}${reasonStr}] (Offscreen: ${response.offscreenMs || '?'} ms, Query: ${response.queryMs || '?'} ms, ${response.passageCount || 0} passages [${response.precomputedHits || 0} precomputed] in ${response.passageMs || '?'} ms)`);
         sendResponse({
           ...response,
           t_sent: requestData.t_sent || null,

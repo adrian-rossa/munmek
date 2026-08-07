@@ -77,7 +77,11 @@ Return JSON with "words_analysis": [{
           <input type="checkbox" id="enableOnnxReranker" style="width:auto;">
           Enable Stage 2 Definition Reranking & Confidence Scores
         </label>
-        <div class="hint" style="margin-bottom:14px;">Reranks dictionary definitions and computes contextual confidence scores using the local neural model. <strong>Note: Enabling this costs more CPU/RAM performance during word lookups.</strong></div>
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
+          <input type="checkbox" id="enableWebGpu" style="width:auto;">
+          Enable WebGPU Hardware Acceleration for Stage 2 (Faster GPU inference)
+        </label>
+        <div class="hint" style="margin-bottom:14px;">Leverages your GPU for Stage 2 neural embeddings when supported, accelerating multi-definition reranking from seconds down to milliseconds. Automatically falls back to CPU WASM if unavailable.</div>
 
         <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
           <input type="checkbox" id="useFullContext" style="width:auto;">

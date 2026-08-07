@@ -38,7 +38,9 @@
             queryMs: timingInfo.queryMs || 0,
             passageMs: timingInfo.passageMs || 0,
             passageCount: timingInfo.passageCount || 0,
-            precomputedHits: timingInfo.precomputedHits || 0
+            precomputedHits: timingInfo.precomputedHits || 0,
+            activeProvider: timingInfo.activeProvider || 'WASM',
+            providerReason: timingInfo.providerReason || ''
           });
         } catch (err) {
           console.warn('[Munmek Offscreen Bridge] Dictionary rerank error:', err);

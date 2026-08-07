@@ -106,7 +106,25 @@
   }
 
   async function ensureOrtLoaded() {
-    if (typeof globalThis.ort !== 'undefined') return globalThis.ort;
+    if (typeof globalThis.ort !== 'undefined') {
+      if (globalThis.ort.env && globalThis.ort.env.wasm) {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
+          const baseUrl = chrome.runtime.getURL('lib/onnx/');
+          globalThis.ort.env.wasm.wasmPaths = {
+            'ort-wasm-simd-threaded.wasm': baseUrl + 'ort-wasm-simd-threaded.wasm',
+            'ort-wasm-simd-threaded.jsep.wasm': baseUrl + 'ort-wasm-simd-threaded.jsep.wasm',
+            'ort-wasm-simd-threaded.jsep.mjs': baseUrl + 'ort-wasm-simd-threaded.jsep.mjs',
+            'ort-wasm-simd.wasm': baseUrl + 'ort-wasm-simd-threaded.wasm',
+            'ort-wasm-simd.jsep.wasm': baseUrl + 'ort-wasm-simd-threaded.jsep.wasm',
+            'ort-wasm-simd.jsep.mjs': baseUrl + 'ort-wasm-simd-threaded.jsep.mjs',
+            'ort-wasm.wasm': baseUrl + 'ort-wasm-simd-threaded.wasm'
+          };
+          globalThis.ort.env.wasm.numThreads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? Math.min(navigator.hardwareConcurrency, 4) : 4;
+          globalThis.ort.env.wasm.simd = true;
+        }
+      }
+      return globalThis.ort;
+    }
     if (typeof process !== 'undefined' && process.versions && process.versions.node) {
       try {
         const path = await import('path');
@@ -214,10 +232,59 @@
 
       if (modelBuffer && typeof globalThis.ort !== 'undefined') {
         try {
-          multilingualSession = await globalThis.ort.InferenceSession.create(modelBuffer);
-          console.log('[Munmek ONNX Stage 2] Multilingual E5 Small INT8 session loaded!');
+          let enableWebGpu = true;
+          if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            enableWebGpu = await new Promise((resolve) => {
+              chrome.storage.local.get(['enableWebGpu'], (res) => resolve(res && typeof res.enableWebGpu === 'boolean' ? res.enableWebGpu : true));
+            });
+          }
+
+          let useWebGpu = false;
+          if (enableWebGpu && typeof navigator !== 'undefined' && navigator.gpu) {
+            try {
+              const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+              if (adapter) {
+                const device = await adapter.requestDevice();
+                if (device) {
+                  useWebGpu = true;
+                  console.log('[Munmek ONNX Stage 2] WebGPU Adapter & Device acquired successfully!', { name: adapter.name || 'GPU' });
+                }
+              }
+            } catch (gpuErr) {
+              console.warn('[Munmek ONNX Stage 2] WebGPU requestAdapter notice:', gpuErr.message);
+            }
+          }
+
+          if (useWebGpu) {
+            try {
+              console.log('[Munmek ONNX Stage 2] Requesting WebGPU InferenceSession...');
+              multilingualSession = await globalThis.ort.InferenceSession.create(modelBuffer, { executionProviders: ['webgpu'] });
+              multilingualSession._activeProvider = 'WEBGPU';
+              multilingualSession._providerReason = 'WebGPU active on GPU hardware';
+              console.log('[Munmek ONNX Stage 2] Multilingual E5 session loaded! Pre-compiling WebGPU shaders...');
+              try {
+                await computeMultilingualEmbedding('query: warmup', 16);
+                console.log('[Munmek ONNX Stage 2] WebGPU shaders pre-compiled successfully!');
+              } catch (warmupErr) {
+                console.warn('[Munmek ONNX Stage 2] WebGPU shader warmup notice:', warmupErr.message);
+              }
+            } catch (webgpuErr) {
+              const msg = webgpuErr?.message || String(webgpuErr);
+              console.warn('[Munmek ONNX Stage 2] WebGPU session creation notice (falling back to WASM CPU):', msg);
+              multilingualSession = await globalThis.ort.InferenceSession.create(modelBuffer, { executionProviders: ['wasm'] });
+              multilingualSession._activeProvider = 'WASM';
+              multilingualSession._providerReason = `WebGPU fallback: ${msg}`;
+              console.log('[Munmek ONNX Stage 2] WASM CPU session active.');
+            }
+          } else {
+            console.log('[Munmek ONNX Stage 2] WebGPU disabled or hardware unavailable, loading WASM CPU session...');
+            multilingualSession = await globalThis.ort.InferenceSession.create(modelBuffer, { executionProviders: ['wasm'] });
+            multilingualSession._activeProvider = 'WASM';
+            multilingualSession._providerReason = !enableWebGpu ? 'WebGPU option disabled in settings' : 'navigator.gpu unavailable';
+            console.log('[Munmek ONNX Stage 2] WASM CPU session active.');
+          }
         } catch (sessErr) {
-          console.warn('[Munmek ONNX Stage 2] WASM session creation notice:', sessErr.message);
+          console.warn('[Munmek ONNX Stage 2] Session creation notice:', sessErr.message);
         }
       }
     } catch (err) {
@@ -262,8 +329,17 @@
     if (session && multilingualTokenizerInstance) {
       try {
         const encoded = multilingualTokenizerInstance.encode(text, maxLen);
-        const inputTensor = new globalThis.ort.Tensor('int64', encoded.inputIds, [1, maxLen]);
-        const maskTensor = new globalThis.ort.Tensor('int64', encoded.attentionMask, [1, maxLen]);
+        let actualLen = 16;
+        for (let i = 0; i < encoded.attentionMask.length; i++) {
+          if (Number(encoded.attentionMask[i]) === 1) actualLen = i + 1;
+        }
+        actualLen = Math.min(actualLen, maxLen);
+
+        const inputIdsTrimmed = encoded.inputIds.subarray(0, actualLen);
+        const attentionMaskTrimmed = encoded.attentionMask.subarray(0, actualLen);
+
+        const inputTensor = new globalThis.ort.Tensor('int64', inputIdsTrimmed, [1, actualLen]);
+        const maskTensor = new globalThis.ort.Tensor('int64', attentionMaskTrimmed, [1, actualLen]);
 
         const feeds = {
           input_ids: inputTensor,
@@ -329,6 +405,101 @@
     }
 
     return null;
+  }
+
+  async function computeMultilingualEmbeddingsBatch(textsArray, maxLen = 64) {
+    if (!Array.isArray(textsArray) || textsArray.length === 0) return [];
+    if (textsArray.length === 1) {
+      const single = await computeMultilingualEmbedding(textsArray[0], maxLen);
+      return [single];
+    }
+    const session = await initMultilingualSession();
+    if (!session || !multilingualTokenizerInstance) {
+      return Promise.all(textsArray.map((t) => computeMultilingualEmbedding(t, maxLen)));
+    }
+
+    try {
+      const batchSize = textsArray.length;
+      const rawEncodings = textsArray.map((t) => multilingualTokenizerInstance.encode(t, maxLen));
+
+      let actualMaxLen = 16;
+      for (const enc of rawEncodings) {
+        let count = 0;
+        for (let i = 0; i < enc.attentionMask.length; i++) {
+          if (Number(enc.attentionMask[i]) === 1) count = i + 1;
+        }
+        if (count > actualMaxLen) actualMaxLen = count;
+      }
+      actualMaxLen = Math.min(actualMaxLen, maxLen);
+
+      const batchInputIds = new BigInt64Array(batchSize * actualMaxLen);
+      const batchAttentionMask = new BigInt64Array(batchSize * actualMaxLen);
+      const encodings = [];
+
+      for (let b = 0; b < batchSize; b++) {
+        const enc = rawEncodings[b];
+        encodings.push(enc);
+        const offset = b * actualMaxLen;
+        for (let i = 0; i < actualMaxLen; i++) {
+          batchInputIds[offset + i] = enc.inputIds[i];
+          batchAttentionMask[offset + i] = enc.attentionMask[i];
+        }
+      }
+
+      const inputTensor = new globalThis.ort.Tensor('int64', batchInputIds, [batchSize, actualMaxLen]);
+      const maskTensor = new globalThis.ort.Tensor('int64', batchAttentionMask, [batchSize, actualMaxLen]);
+
+      const feeds = {
+        input_ids: inputTensor,
+        attention_mask: maskTensor
+      };
+
+      const results = await session.run(feeds);
+      const outputTensor = results.last_hidden_state || Object.values(results)[0];
+
+      if (outputTensor && outputTensor.data) {
+        const data = outputTensor.data;
+        const seqLen = outputTensor.dims[1] || maxLen;
+        const hiddenDim = outputTensor.dims[2] || 384;
+        const embeddings = [];
+
+        for (let b = 0; b < batchSize; b++) {
+          const mask = encodings[b].attentionMask;
+          const meanVector = new Float32Array(hiddenDim);
+          let validCount = 0;
+          const batchOffset = b * seqLen * hiddenDim;
+
+          for (let i = 0; i < seqLen; i++) {
+            if (Number(mask[i]) === 1) {
+              validCount++;
+              const tokenOffset = batchOffset + i * hiddenDim;
+              for (let d = 0; d < hiddenDim; d++) {
+                meanVector[d] += Number(data[tokenOffset + d]);
+              }
+            }
+          }
+
+          if (validCount > 0) {
+            for (let d = 0; d < hiddenDim; d++) {
+              meanVector[d] /= validCount;
+            }
+          }
+
+          let norm = 0;
+          for (let d = 0; d < hiddenDim; d++) norm += meanVector[d] * meanVector[d];
+          norm = Math.sqrt(norm);
+          if (norm > 0) {
+            for (let d = 0; d < hiddenDim; d++) meanVector[d] /= norm;
+          }
+          embeddings.push(meanVector);
+        }
+        return embeddings;
+      }
+    } catch (err) {
+      console.warn('[Munmek ONNX Stage 2] Batched E5 ONNX inference fallback:', err.message);
+    }
+
+    return Promise.all(textsArray.map((t) => computeMultilingualEmbedding(t, maxLen)));
   }
 
   function cosineSimilarity(vecA, vecB) {
@@ -597,7 +768,16 @@
     return scored;
   }
 
+  let stage1Queue = Promise.resolve();
+  let stage2Queue = Promise.resolve();
+
   async function rerankCandidatesAsync(candidates, sentenceContext = '') {
+    const nextTask = stage1Queue.then(() => _doRerankCandidatesAsync(candidates, sentenceContext));
+    stage1Queue = nextTask.catch(() => {});
+    return nextTask;
+  }
+
+  async function _doRerankCandidatesAsync(candidates, sentenceContext = '') {
     if (!Array.isArray(candidates) || candidates.length === 0) return [];
     const sentence = (sentenceContext || '').trim();
     if (!sentence) return candidates;
@@ -613,23 +793,22 @@
         return rerankCandidates(candidates, sentenceContext);
       }
 
-      const scoredList = await Promise.all(
-        candidates.map(async (cand) => {
-          const candEmbedding = await computeEmbedding(cand.text, 16);
-          let onnxScore = candEmbedding ? cosineSimilarity(contextEmbedding, candEmbedding) : 0;
-          let boost = Math.round(onnxScore * 40);
+      const scoredList = [];
+      for (const cand of candidates) {
+        const candEmbedding = await computeEmbedding(cand.text, 16);
+        let onnxScore = candEmbedding ? cosineSimilarity(contextEmbedding, candEmbedding) : 0;
+        let boost = Math.round(onnxScore * 40);
 
-          let updatedScore = (cand.score || 50) + boost;
-          let updatedReason = (cand.reason || 'candidate') + ` [KoELECTRA Boost: +${boost}]`;
+        let updatedScore = (cand.score || 50) + boost;
+        let updatedReason = (cand.reason || 'candidate') + ` [KoELECTRA Boost: +${boost}]`;
 
-          return {
-            ...cand,
-            score: updatedScore,
-            reason: updatedReason,
-            meta: { ...(cand.meta || {}), neuralReranked: true, onnxSimilarity: onnxScore }
-          };
-        })
-      );
+        scoredList.push({
+          ...cand,
+          score: updatedScore,
+          reason: updatedReason,
+          meta: { ...(cand.meta || {}), neuralReranked: true, onnxSimilarity: onnxScore }
+        });
+      }
 
       scoredList.sort((a, b) => b.score - a.score || a.text.length - b.text.length);
       console.log('[Munmek ONNX Stage 1] Top selected candidate:', scoredList[0]?.text);
@@ -675,12 +854,11 @@
     if (!Array.isArray(rawSims) || rawSims.length === 0) return { bestDefIndex: 0, highestSim: 0, defConfidenceScores: [] };
     if (rawSims.length === 1) {
       const sim = rawSims[0];
-      const percent = Math.min(98, Math.max(70, Math.round(70 + Math.max(0, sim) * 80)));
+      const percent = Math.min(95, Math.max(65, Math.round(60 + Math.max(0, sim) * 100)));
       return { bestDefIndex: 0, highestSim: sim, defConfidenceScores: [`${percent}%`] };
     }
 
     let highestSim = -Infinity;
-    let lowestSim = Infinity;
     let bestDefIndex = 0;
 
     for (let i = 0; i < rawSims.length; i++) {
@@ -689,18 +867,19 @@
         highestSim = sim;
         bestDefIndex = i;
       }
-      if (sim < lowestSim) {
-        lowestSim = sim;
-      }
     }
 
-    const range = highestSim - lowestSim;
-    const defConfidenceScores = rawSims.map((sim) => {
-      if (range < 0.005) {
-        return '70%';
-      }
-      const relativeMargin = (sim - lowestSim) / range;
-      const calibratedPercent = Math.min(98, Math.max(55, Math.round(55 + relativeMargin * 40)));
+    const T = 0.04;
+    const maxSim = highestSim;
+    const expSims = rawSims.map((sim) => Math.exp((sim - maxSim) / T));
+    const sumExp = expSims.reduce((a, b) => a + b, 0);
+    const probs = expSims.map((exp) => exp / (sumExp || 1));
+
+    const absScale = Math.min(1.0, Math.max(0.5, (highestSim + 0.1) / 0.35));
+
+    const defConfidenceScores = probs.map((prob) => {
+      const baseConf = 52 + prob * 43 * absScale;
+      const calibratedPercent = Math.min(95, Math.max(52, Math.round(baseConf)));
       return `${calibratedPercent}%`;
     });
 
@@ -716,22 +895,25 @@
       .trim();
   }
 
+  function isSentencePattern(text) {
+    if (!text || typeof text !== 'string') return false;
+    const t = text.trim();
+    if (/^(Sentence|Grammar|Pattern|文型)\s*:?/i.test(t)) return true;
+    if (/^\d+[이가을를에에서과와도만으로로은는](?:\s|$)/i.test(t)) return true;
+    return false;
+  }
+
   function splitEmbeddedDefinitions(defList, surfaceWord = '') {
     if (!Array.isArray(defList) || defList.length === 0) return [];
 
-    const hasEmbeddedNumbers = defList.some((item) => typeof item === 'string' && /(?:\b\d{1,2}[\.\)]\s+)/.test(item));
-    if (!hasEmbeddedNumbers) {
-      return defList.map(formatDefinitionText).filter((t) => Boolean(t));
-    }
-
-    const allLines = [];
+    const rawLines = [];
     defList.forEach((item) => {
       if (!item || typeof item !== 'string') return;
       const subParts = item.split(/(?<=\D|^)(?=\b\d{1,2}[\.\)]\s+)/g);
       subParts.forEach((part) => {
         part.split(/\r?\n/).forEach((l) => {
           const t = l.trim();
-          if (t) allLines.push(t);
+          if (t) rawLines.push(t);
         });
       });
     });
@@ -739,22 +921,28 @@
     const senses = [];
     let currentSense = null;
 
-    allLines.forEach((line) => {
+    const isDescriptionLine = (text) => {
+      if (!text) return false;
+      const t = text.trim();
+      return /^(To\s+[a-z]|Feeling\s+[a-z]|Having\s+[a-z]|Being\s+[a-z]|A\s+[a-z]|An\s+[a-z]|The\s+[a-z]|Conjugation|Conjugations)/i.test(t);
+    };
+
+    rawLines.forEach((line) => {
       let cleaned = line.trim();
       if (!cleaned) return;
 
       const isStemOnly = surfaceWord && (cleaned === `${surfaceWord}-` || cleaned === `${surfaceWord} -` || cleaned === `${surfaceWord}–`);
-      if (isStemOnly || !/[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ\u3040-\u30ff\u4e00-\u9faf]/.test(cleaned)) return;
+      if (isStemOnly) return;
 
       const numberedMatch = cleaned.match(/^(\d{1,2})[\.\)]\s*(.*)/s);
       if (numberedMatch) {
         if (currentSense) senses.push(currentSense);
         cleaned = numberedMatch[2].trim();
-        currentSense = { title: cleaned, body: '', pattern: '' };
+        currentSense = { title: cleaned, bodyLines: [], pattern: '' };
         return;
       }
 
-      if (/^(Sentence|Grammar|Pattern|文型)\s*:?/i.test(cleaned)) {
+      if (isSentencePattern(cleaned)) {
         const patternText = cleaned.replace(/^(Sentence|Grammar|Pattern|文型)\s*:?\s*/i, '').trim();
         if (patternText && currentSense) {
           currentSense.pattern = currentSense.pattern ? `${currentSense.pattern}; ${patternText}` : patternText;
@@ -763,20 +951,25 @@
       }
 
       cleaned = cleaned.replace(/^[\d]+[\.\)]\s*/, '').trim();
-
       if (/^\([^)]+\)\s*→\s*.+/.test(cleaned)) {
         cleaned = `Conjugation variant: ${cleaned}`;
       } else if (/^\([^)]*(어|아|어서|아서|으니|으면|은)[^)]*\)/.test(cleaned)) {
         cleaned = `Conjugations: ${cleaned}`;
       }
 
-      if (!currentSense) {
-        currentSense = { title: cleaned, body: '', pattern: '' };
-      } else if (!currentSense.body) {
-        currentSense.body = cleaned;
+      if (currentSense) {
+        if (isDescriptionLine(cleaned) || !currentSense.title) {
+          if (!currentSense.title) {
+            currentSense.title = cleaned;
+          } else {
+            currentSense.bodyLines.push(cleaned);
+          }
+        } else {
+          senses.push(currentSense);
+          currentSense = { title: cleaned, bodyLines: [], pattern: '' };
+        }
       } else {
-        senses.push(currentSense);
-        currentSense = { title: cleaned, body: '', pattern: '' };
+        currentSense = { title: cleaned, bodyLines: [], pattern: '' };
       }
     });
 
@@ -787,7 +980,7 @@
     return senses.map((s) => {
       const parts = [];
       if (s.title) parts.push(s.title);
-      if (s.body) parts.push(s.body);
+      if (s.bodyLines && s.bodyLines.length > 0) parts.push(s.bodyLines.join('\n'));
       if (s.pattern) parts.push(`(Pattern: ${s.pattern})`);
       return parts.join('\n');
     });
@@ -798,6 +991,12 @@
    * Optimized with Pre-computed Int8 Definition Vector Store & Parallel Passages
    */
   async function rerankDictionaryEntriesAsync(entries, sentenceContext = '', targetWord = '') {
+    const nextTask = stage2Queue.then(() => _doRerankDictionaryEntriesAsync(entries, sentenceContext, targetWord));
+    stage2Queue = nextTask.catch(() => {});
+    return nextTask;
+  }
+
+  async function _doRerankDictionaryEntriesAsync(entries, sentenceContext = '', targetWord = '') {
     if (!Array.isArray(entries) || entries.length === 0) return entries || [];
     const sentence = (sentenceContext || '').trim();
     if (!sentence) return entries;
@@ -827,69 +1026,134 @@
       let precomputedHits = 0;
 
       const groupedMap = groupEntriesByDict(entries);
+      const uncachedPassagesSet = new Set();
+      const passageTextToCleanMap = new Map();
+
+      for (const group of groupedMap.values()) {
+        for (const item of group) {
+          const entry = item.entry;
+          const rawDefs = Array.isArray(entry.definitions) ? entry.definitions : [];
+          const splitSenseDefs = splitEmbeddedDefinitions(rawDefs, entry.surface || entry.word || '');
+          const passages = splitSenseDefs.length > 0 ? splitSenseDefs : (rawDefs.length > 0 ? rawDefs : [entry.surface || '']);
+          passageCount += passages.length;
+
+          for (const defText of passages) {
+            if (entry._defVectors && entry._defVectors[defText]) {
+              precomputedHits++;
+              continue;
+            }
+            const precomputedInt8 = getPrecomputedInt8Vector(defText, precomputedStore);
+            if (precomputedInt8 && queryEmbedding.length === precomputedInt8.length) {
+              precomputedHits++;
+              continue;
+            }
+            const str = String(defText).trim();
+            const cleanDef = str.replace(/<[^>]*>/g, '').replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim() || str;
+            const passageQuery = `passage: ${cleanDef}`;
+            passageTextToCleanMap.set(defText, passageQuery);
+            uncachedPassagesSet.add(passageQuery);
+          }
+        }
+      }
+
+      const uncachedList = Array.from(uncachedPassagesSet);
+      const computedEmbeddingsMap = new Map();
+      if (uncachedList.length > 0) {
+        const batchEmbeddings = await computeMultilingualEmbeddingsBatch(uncachedList, 64);
+        for (let i = 0; i < uncachedList.length; i++) {
+          if (batchEmbeddings[i]) {
+            computedEmbeddingsMap.set(uncachedList[i], batchEmbeddings[i]);
+          }
+        }
+      }
+
       const rerankedEntries = [];
 
       for (const [dictTitle, group] of groupedMap.entries()) {
-        const scoredGroup = await Promise.all(
-          group.map(async (item) => {
-            const entry = item.entry;
-            const rawDefs = Array.isArray(entry.definitions) ? entry.definitions : [];
-            const splitSenseDefs = splitEmbeddedDefinitions(rawDefs, entry.surface || entry.word || '');
-            const passages = splitSenseDefs.length > 0 ? splitSenseDefs : (rawDefs.length > 0 ? rawDefs : [entry.surface || '']);
-            passageCount += passages.length;
+        const scoredGroup = [];
+        for (const item of group) {
+          const entry = item.entry;
+          const rawDefs = Array.isArray(entry.definitions) ? entry.definitions : [];
+          const splitSenseDefs = splitEmbeddedDefinitions(rawDefs, entry.surface || entry.word || '');
+          const passages = splitSenseDefs.length > 0 ? splitSenseDefs : (rawDefs.length > 0 ? rawDefs : [entry.surface || '']);
 
-            const rawSims = await Promise.all(
-              passages.map(async (defText) => {
-                if (entry._defVectors && entry._defVectors[defText]) {
-                  const inlineVec = entry._defVectors[defText];
-                  precomputedHits++;
-                  return inlineVec instanceof Int8Array ? dotProductInt8(queryEmbedding, inlineVec) : dotProduct(queryEmbedding, inlineVec);
-                }
+          const rawSims = [];
+          for (const defText of passages) {
+            if (entry._defVectors && entry._defVectors[defText]) {
+              const inlineVec = entry._defVectors[defText];
+              rawSims.push(inlineVec instanceof Int8Array ? dotProductInt8(queryEmbedding, inlineVec) : dotProduct(queryEmbedding, inlineVec));
+              continue;
+            }
 
-                const precomputedInt8 = getPrecomputedInt8Vector(defText, precomputedStore);
-                if (precomputedInt8 && queryEmbedding.length === precomputedInt8.length) {
-                  precomputedHits++;
-                  return dotProductInt8(queryEmbedding, precomputedInt8);
-                }
+            const precomputedInt8 = getPrecomputedInt8Vector(defText, precomputedStore);
+            if (precomputedInt8 && queryEmbedding.length === precomputedInt8.length) {
+              rawSims.push(dotProductInt8(queryEmbedding, precomputedInt8));
+              continue;
+            }
 
-                const str = String(defText).trim();
-                const cleanDef = str.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim() || str;
-                const emb = await computeMultilingualEmbedding(`passage: ${cleanDef}`, 64);
-                return emb ? dotProduct(queryEmbedding, emb) : 0;
-              })
-            );
+            const passageQuery = passageTextToCleanMap.get(defText);
+            const emb = computedEmbeddingsMap.get(passageQuery);
+            rawSims.push(emb ? dotProduct(queryEmbedding, emb) : 0);
+          }
 
-            const defScores = rawSims.map((sim) => Math.round(sim * 100));
+          const defScores = rawSims.map((sim) => Math.round(sim * 100));
 
-            const { bestDefIndex, highestSim, defConfidenceScores } = calibrateDefinitionConfidenceScores(rawSims);
-            const topConf = defConfidenceScores[bestDefIndex] || '75%';
+          const { bestDefIndex, highestSim, defConfidenceScores } = calibrateDefinitionConfidenceScores(rawSims);
+          const topConf = defConfidenceScores[bestDefIndex] || '75%';
 
-            console.log(`[Munmek ONNX Stage 2] Entry (${entry.surface || entry.word || ''} - ${entry.pos || ''}):`, {
-              dictTitle,
-              bestDefIndex: bestDefIndex + 1,
-              defConfidenceScores,
-              highestSim: highestSim.toFixed(4)
-            });
+          console.log(`[Munmek ONNX Stage 2] Entry (${entry.surface || entry.word || ''} - ${entry.pos || ''}):`, {
+            dictTitle,
+            bestDefIndex: bestDefIndex + 1,
+            defConfidenceScores,
+            highestSim: highestSim.toFixed(4)
+          });
 
-            return {
-              ...entry,
-              _koelectraConfidence: topConf,
-              _confidenceScore: topConf,
-              _bestDefIndex: bestDefIndex,
-              _defScores: defScores,
-              _defConfidenceScores: defConfidenceScores,
-              _simScore: highestSim
-            };
-          })
-        );
+          scoredGroup.push({
+            ...entry,
+            _koelectraConfidence: topConf,
+            _confidenceScore: topConf,
+            _bestDefIndex: bestDefIndex,
+            _defScores: defScores,
+            _defConfidenceScores: defConfidenceScores,
+            _simScore: highestSim
+          });
+        }
 
         scoredGroup.sort((a, b) => (b._simScore || 0) - (a._simScore || 0));
+        const topEntry = scoredGroup[0];
+        const topSim = topEntry ? (topEntry._simScore || 0) : 0;
+        const topConfNum = topEntry ? parseInt(topEntry._confidenceScore || '75', 10) : 75;
+
         scoredGroup.forEach((item, index) => {
+          let updatedConfScore = item._confidenceScore;
+          let updatedDefConfs = item._defConfidenceScores;
+
+          if (index > 0 && topSim > 0 && item._simScore < topSim) {
+            const ratio = Math.max(0.4, item._simScore / topSim);
+            const maxAllowedConf = Math.min(topConfNum - 5, Math.round(topConfConfRatio(topConfNum, ratio)));
+            
+            if (Array.isArray(item._defConfidenceScores)) {
+              updatedDefConfs = item._defConfidenceScores.map((cStr) => {
+                const cNum = parseInt(cStr || '55', 10);
+                const scaled = Math.min(maxAllowedConf, Math.max(52, Math.round(cNum * ratio)));
+                return `${scaled}%`;
+              });
+              updatedConfScore = updatedDefConfs[item._bestDefIndex || 0] || `${maxAllowedConf}%`;
+            }
+          }
+
           rerankedEntries.push({
             ...item,
+            _confidenceScore: updatedConfScore,
+            _koelectraConfidence: updatedConfScore,
+            _defConfidenceScores: updatedDefConfs,
             _koelectraMatched: index === 0
           });
         });
+      }
+
+      function topConfConfRatio(topConf, ratio) {
+        return topConf * Math.pow(ratio, 0.5);
       }
 
       const tPEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -899,12 +1163,22 @@
       console.log(`[Munmek ONNX Stage 2] Rerank complete in ${totalMs} ms (Query: ${queryMs} ms, ${passageCount} passages [${precomputedHits} pre-computed] in ${passageMs} ms)`);
 
       if (rerankedEntries.length > 0) {
+        let activeProv = 'WASM';
+        let provReason = '';
+        try {
+          if (multilingualSession) {
+            if (multilingualSession._activeProvider) activeProv = multilingualSession._activeProvider;
+            if (multilingualSession._providerReason) provReason = multilingualSession._providerReason;
+          }
+        } catch (e) {}
         rerankedEntries[0]._timing = {
           queryMs,
           passageMs,
           passageCount,
           precomputedHits,
-          totalMs
+          totalMs,
+          activeProvider: activeProv,
+          providerReason: provReason
         };
       }
 
@@ -927,6 +1201,7 @@
     initOnnxSession: initKoelectraSession,
     computeEmbedding,
     computeMultilingualEmbedding,
+    computeMultilingualEmbeddingsBatch,
     cosineSimilarity,
     dotProduct,
     dotProductInt8,

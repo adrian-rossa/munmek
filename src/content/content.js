@@ -588,6 +588,27 @@
       return;
     }
 
+    let totalDefs = 0;
+    for (const e of entries) {
+      const defs = Array.isArray(e?.definitions) ? e.definitions : [];
+      totalDefs += defs.length || 1;
+    }
+    if (totalDefs <= 1) {
+      if (currentHoverState) {
+        currentHoverState.isStage2Loading = false;
+        rerenderCurrentTooltip();
+      }
+      return;
+    }
+
+    if (state.geminiMatchedItemIndex !== null || (typeof sentenceAnalysisCache !== 'undefined' && sentenceAnalysisCache.has(state.sentenceKey))) {
+      if (currentHoverState) {
+        currentHoverState.isStage2Loading = false;
+        rerenderCurrentTooltip();
+      }
+      return;
+    }
+
     if (rerankDebounceTimer) {
       clearTimeout(rerankDebounceTimer);
     }
@@ -698,6 +719,8 @@
       currentHoverState.word = selectedCandidate;
       currentHoverState.selectedDefinitionIndex = 0;
       currentHoverState.selectedGroupIndex = 0;
+      currentHoverState.userSelectedDef = false;
+      delete currentHoverState.selectedDefIndex_0;
 
       if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
         chrome.runtime.sendMessage({
@@ -978,6 +1001,11 @@
   function autoSelectBestDefinitionFromGemini(state, analysisData) {
     if (window.MunmekUI && typeof window.MunmekUI.autoSelectBestDefinitionFromGemini === 'function') {
       window.MunmekUI.autoSelectBestDefinitionFromGemini(state, analysisData);
+      state.isStage2Loading = false;
+      if (rerankDebounceTimer) {
+        clearTimeout(rerankDebounceTimer);
+        rerankDebounceTimer = null;
+      }
     }
   }
 
