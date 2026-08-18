@@ -5,28 +5,16 @@
 (function (global) {
   'use strict';
 
-  const HOMONYM_SENSE_ASSOCIATIONS = [];
-  const VOCAB_DOMAIN_MAP = {};
-  const ENABLE_STAGE0_HEURISTICS = false;
 
+
+  /**
+   * Frame 1 instant placeholder.
+   * Returns a baseline score for the dictionary entry.
+   */
   function scoreDictionaryEntry(entry, sentenceContext = '', targetWord = '') {
     const definitions = Array.isArray(entry.definitions) ? entry.definitions : [];
-    let bestDefScore = -Infinity;
-    let bestDefIndex = 0;
-    const defScores = [];
-
-    definitions.forEach((def, defIdx) => {
-      let defScore = 50;
-      defScore -= (defIdx * 5);
-      defScores.push(defScore);
-
-      if (defScore > bestDefScore) {
-        bestDefScore = defScore;
-        bestDefIndex = defIdx;
-      }
-    });
-
-    return { totalScore: bestDefScore, bestDefIndex, defScores };
+    const defScores = definitions.map(() => 50);
+    return { totalScore: 50, bestDefIndex: 0, defScores };
   }
 
   function groupEntriesByDict(entries) {
@@ -81,8 +69,7 @@
   }
 
   const DictionaryReranker = {
-    HOMONYM_SENSE_ASSOCIATIONS,
-    VOCAB_DOMAIN_MAP,
+
     scoreDictionaryEntry,
     rerankDictionaryEntries
   };

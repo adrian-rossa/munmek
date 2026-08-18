@@ -16,6 +16,9 @@ Thumbs.db
 coverage/
 .vitest/
 
+# Dictionaries (imported term banks)
+dictionaries/
+
 # Temp files & Python build artifacts / Large ONNX models (>100MB GitHub limit)
 *.log
 scratch/

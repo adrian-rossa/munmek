@@ -9,6 +9,15 @@
   const sentenceAnalysisCache = new Map();
   const pendingAnalysisRequests = new Map();
   const pendingQuickFallbacks = new Map();
+  const quickLlmLookupCache = new Map();
+
+  function boundedMapSet(map, key, value, maxSize = 300) {
+    if (map.size >= maxSize) {
+      const firstKey = map.keys().next().value;
+      map.delete(firstKey);
+    }
+    map.set(key, value);
+  }
 
   let hideTimer = null;
   let currentHoverState = null;
@@ -661,11 +670,11 @@
                 }
 
                 const cacheKey = `${candidateWord || state.word}__${state.sentenceKey}`;
-                stage2RerankCache.set(cacheKey, {
+                boundedMapSet(stage2RerankCache, cacheKey, {
                   entries: rerankedEntries,
                   koelectraMatchedItemIndex,
                   koelectraMatchedDefIndex
-                });
+                }, 300);
               }
               rerenderCurrentTooltip();
             }
@@ -886,9 +895,23 @@
   }
 
   function triggerQuickGeminiFallback(state) {
-    if (!state || !state.word || pendingQuickFallbacks.has(state.word)) return;
+    if (!state || !state.word) return;
     const targetWord = state.word;
-    pendingQuickFallbacks.set(targetWord, true);
+    const cacheKey = `${targetWord}__${state.sentenceKey || state.sentence || ''}`;
+
+    if (quickLlmLookupCache.has(cacheKey)) {
+      const cached = quickLlmLookupCache.get(cacheKey);
+      if (currentHoverState && currentHoverState.word === targetWord) {
+        currentHoverState.quickFallback = cached;
+        currentHoverState.lookupReason = `Quick LLM Lookup (${cached.pos || 'LLM'})`;
+        currentHoverState.isStage2Loading = false;
+        rerenderCurrentTooltip();
+      }
+      return;
+    }
+
+    if (pendingQuickFallbacks.has(cacheKey)) return;
+    pendingQuickFallbacks.set(cacheKey, true);
 
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
       chrome.runtime.sendMessage(
@@ -902,7 +925,7 @@
           }
         },
         (res) => {
-          pendingQuickFallbacks.delete(targetWord);
+          pendingQuickFallbacks.delete(cacheKey);
           if (chrome.runtime.lastError || !res || res.error) {
             if (currentHoverState && currentHoverState.word === state.word) {
               let errMsg = res?.error || chrome.runtime.lastError?.message || 'Quick LLM Lookup failed.';
@@ -916,10 +939,13 @@
             }
             return;
           }
-          if (res && res.data && currentHoverState && currentHoverState.word === state.word) {
-            currentHoverState.quickFallback = res.data;
-            currentHoverState.lookupReason = `Quick LLM Lookup (${res.data.pos || 'LLM'})`;
-            rerenderCurrentTooltip();
+          if (res && res.data) {
+            boundedMapSet(quickLlmLookupCache, cacheKey, res.data, 200);
+            if (currentHoverState && currentHoverState.word === state.word) {
+              currentHoverState.quickFallback = res.data;
+              currentHoverState.lookupReason = `Quick LLM Lookup (${res.data.pos || 'LLM'})`;
+              rerenderCurrentTooltip();
+            }
           }
         }
       );
@@ -989,9 +1015,9 @@
           return;
         }
 
-        sentenceAnalysisCache.set(state.sentenceKey, response.data);
+        boundedMapSet(sentenceAnalysisCache, state.sentenceKey, response.data, 200);
         const wordKey = normalizeText(state.word || '');
-        if (wordKey) sentenceAnalysisCache.set(`${wordKey}__${state.sentenceKey}`, response.data);
+        if (wordKey) boundedMapSet(sentenceAnalysisCache, `${wordKey}__${state.sentenceKey}`, response.data, 200);
         autoSelectBestDefinitionFromGemini(state, response.data);
         currentHoverState.feedback = 'Gemini analysis ready.';
         currentHoverState.feedbackType = 'info';

@@ -73,4 +73,63 @@ describe('Korean Lemmatizer Rule Engine', () => {
     const texts = candidates.map(c => c.text);
     expect(texts).toContain('작다');
   });
+
+  it('deconjugates propositive interrogative -ㄹ까요 (e.g. 갈까요 -> 가다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('갈까요');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('가다');
+  });
+
+  it('deconjugates vowel contraction in polite present -ㅏ endings (e.g. 들어가요 -> 들어가다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('들어가요');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('들어가다');
+    // Ensure ㄷ-irregular does not over-match and generate 듣다
+    expect(texts).not.toContain('듣다');
+  });
+
+  it('deconjugates past tense 르-irregular verbs (e.g. 골랐어요 -> 고르다, 불렀어요 -> 부르다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('골랐어요');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('고르다');
+
+    const candidatesBulleo = globalThis.KoreanLemmatizer.deconjugate('불렀어요');
+    expect(candidatesBulleo.map(c => c.text)).toContain('부르다');
+  });
+
+  it('deconjugates vowel contraction in -ㅐ stems (e.g. 꺼내요 -> 꺼내다, 보내요 -> 보내다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('꺼내요');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('꺼내다');
+  });
+
+  it('deconjugates vowel contraction in -ㅣ stems (e.g. 기다려요 -> 기다리다, 마셔요 -> 마시다)', () => {
+    const candidates = globalThis.KoreanLemmatizer.deconjugate('기다려요');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('기다리다');
+
+    const candidatesMasyeo = globalThis.KoreanLemmatizer.deconjugate('마셔요');
+    expect(candidatesMasyeo.map(c => c.text)).toContain('마시다');
+  });
+});
+
+describe('Korean Pipeline Compound & Subword Decomposition', () => {
+  it('decomposes modifier-noun phrases (e.g. 매운라면 -> 맵다, 매운, 라면)', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('매운라면');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('맵다');
+    expect(texts).toContain('매운');
+    expect(texts).toContain('라면');
+  });
+
+  it('decomposes compound nouns (e.g. 얼음컵 -> 얼음, 컵)', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('얼음컵');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('얼음');
+    expect(texts).toContain('컵');
+  });
 });

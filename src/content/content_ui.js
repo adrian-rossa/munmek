@@ -182,6 +182,22 @@
     return String(value || '').replace(/<[^>]*>/g, '').trim();
   }
 
+  function isHeadwordOrAffixEcho(text, surfaceWord) {
+    if (!text || typeof text !== 'string') return false;
+    const t = text.trim();
+    if (!surfaceWord) {
+      return /^[-~—]?[가-힣]{1,4}[-~—]?$/.test(t);
+    }
+    const normSurface = surfaceWord.replace(/^[-~—]+|[-~—]+$/g, '').trim();
+    const cleanT = t.replace(/^[-~—]+|[-~—]+$/g, '').trim();
+    if (cleanT === normSurface || cleanT === surfaceWord) return true;
+    if (normSurface) {
+      const headwordRegex = new RegExp(`^[-~—]?${normSurface}(?:\\d+|\\s*\\([^)]*\\)|\\s*〔[^〕]*〕)?[-~—]?$`);
+      if (headwordRegex.test(t)) return true;
+    }
+    return false;
+  }
+
   function splitEmbeddedDefinitions(defList, surfaceWord = '') {
     if (!Array.isArray(defList) || defList.length === 0) return [];
 
@@ -203,15 +219,20 @@
     const isDescriptionLine = (text) => {
       if (!text) return false;
       const t = text.trim();
-      return /^(To\s+[a-z]|Feeling\s+[a-z]|Having\s+[a-z]|Being\s+[a-z]|A\s+[a-z]|An\s+[a-z]|The\s+[a-z]|Conjugation|Conjugations)/i.test(t);
+      if (/^(To\s+|Feeling\s+|Having\s+|Being\s+|A\s+|An\s+|The\s+|Used\s+|Conjugation|Conjugations)/i.test(t)) return true;
+      if (/^\([^\)]*\)\s*(?:To\s+|A\s+|An\s+|The\s+|Being\s+|Feeling\s+|Used\s+)/i.test(t)) return true;
+      if (/^(人|物|こと|～|する|ある|いる|よう|状態|行為)/.test(t)) return true;
+      return false;
     };
 
     rawLines.forEach((line) => {
       let cleaned = line.trim();
       if (!cleaned) return;
 
-      const isStemOnly = surfaceWord && (cleaned === `${surfaceWord}-` || cleaned === `${surfaceWord} -` || cleaned === `${surfaceWord}–`);
-      if (isStemOnly) return;
+      // Skip stem/headword/affix echo lines (e.g. "-사", "사-", "사", "가다-")
+      if (isHeadwordOrAffixEcho(cleaned, surfaceWord)) {
+        return;
+      }
 
       const numberedMatch = cleaned.match(/^(\d{1,2})[\.\)]\s*(.*)/s);
       if (numberedMatch) {

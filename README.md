@@ -16,7 +16,7 @@ Credits for the amazing [blog post](https://kimchi-reader.app/blog/int8-cpu-kore
   - **Tier 2 (Garu-ko WASM Analyzer)**: Runs a compact WebAssembly analyzer (~1.8 MB) inside a Manifest V3 Offscreen Document to extract base dictionary stems offline.
 - 🧠 **Multi-Stage Progressive Neural Reranker & Sense Preselector**:
   - **Stage 1 (KoELECTRA INT8 ONNX, ~14.3 MB)**: Runs pure Korean candidate deinflection lemma reranking inside a Manifest V3 Offscreen Document, ranking candidate stems (e.g. `[듣다]` vs `[들다]`, `[짓다]` vs `[지다]`).
-  - **Stage 2 (Multilingual E5 INT8 ONNX, ~118 MB, EXPERIMENTAL)**: Optionally computes cross-lingual bi-encoder vector embeddings mapping Korean sentence context directly to multilanguage definitions for semantic sense disambiguation. Features **WebGPU Hardware Acceleration** (experimental, disabled by default) with automatic WASM SIMD CPU fallback. You can also import precomputated vector files to speed up reranking further. Currently this feature needs more fine-tuning and is a work in progress.
+  - **Stage 2 (Multilingual E5 INT8 ONNX, ~118 MB)**: Computes cross-lingual bi-encoder vector embeddings mapping Korean sentence context directly to multilingual definition glosses for semantic sense disambiguation and automatic definition tab preselection. Features **WebGPU Hardware Acceleration** with automatic WASM SIMD CPU fallback, Temperature-Scaled Softmax confidence calibration ($\tau = 0.06$), Int8 quantization norm compensation, and optional precomputed vector file imports.
 - 🤖 **On-Demand Gemini AI & Multi-Group Auto-Tab Switcher**: Click "Ask Gemini" inside the hover tooltip for context-aware grammar notes, clause analysis, and nuances. Gemini matching searches across all candidate chunk groups (`dictGroups`), matches base lemmas, filters out dummy conjugation stubs, and automatically switches the active candidate tab to the matched entry. If no local dictionary entry matches, Quick LLM Lookup automatically provides concise contextual definitions to fill the gaps.
 - 📄 **Extension Pin Bar Context Extractor**: Extract active webpage or subtitle content, automatically summarize them with Gemini, and attach them as additional background context for LLM lookups.
 - 🎴 **Interactive AnkiConnect Card Export**: One-click card export to Anki desktop with custom deck selection, note types, and dynamic field mapping (including custom LLM JSON fields). Supports creating new cards or updating the last created card (e.g., from ASBPlayer).
@@ -132,7 +132,7 @@ munmek/
 │   ├── models/                # KoELECTRA INT8 ONNX, Multilingual E5 INT8 ONNX & vocab
 │   ├── onnx/                  # ONNXRuntime-Web engine & WordPiece tokenizer
 │   └── jszip.min.js           # ZIP extraction library for termbank imports
-└── test/                      # Vitest automated test suite (33 passing unit tests)
+└── test/                      # Vitest automated test suite (58 passing unit tests)
 ```
 
 ---
@@ -151,9 +151,11 @@ npx vitest run
 
 The test suite validates:
 - Rule-based Hangul Jamo decomposition and irregular verb/adjective de-conjugations (`test/korean_lemmatizer.test.js`)
+- Negative test cases preventing non-verb false positives (`test/korean_lemmatizer_negative.test.js`)
 - IndexedDB termbank storage & multi-dictionary priority queries (`test/dictionary_db.test.js`)
 - Local rule-based & Multilingual E5 homonym entry reordering & definition tab preselection (`test/koelectra_reranker.test.js`)
 - Two-stage neural candidate deinflection & multilingual dictionary sense tab ranking (`test/two_stage_neural_pipeline.test.js`)
+- Synthetic multi-case accuracy benchmark for pure neural NLP pipeline (`test/synthetic_nlp_eval.test.js`)
 - Gemini definition matching and candidate scoping (`test/gemini_matcher.test.js`)
 - Background messaging and Anki template rendering (`test/background_template.test.js`)
 

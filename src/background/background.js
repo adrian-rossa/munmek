@@ -379,7 +379,23 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
   });
 }
 
+function boundedMapSet(map, key, value, maxSize = 500) {
+  if (map.size >= maxSize) {
+    const firstKey = map.keys().next().value;
+    map.delete(firstKey);
+  }
+  map.set(key, value);
+}
+
+const quickLlmBackgroundCache = new Map();
+
 function handleQuickGeminiFallback(data, sendResponse) {
+  const cacheKey = `${data?.word || ''}__${data?.sentence || ''}`;
+  if (quickLlmBackgroundCache.has(cacheKey)) {
+    sendResponse({ data: quickLlmBackgroundCache.get(cacheKey) });
+    return;
+  }
+
   chrome.storage.local.get(['apiKey', 'modelId', 'responseLanguage', 'customResponseLanguage'], async (config) => {
     try {
       if (!config.apiKey || !config.modelId) {
@@ -417,7 +433,13 @@ Analyze '${data.word}' in sentence: '${data.sentence || ''}'`;
       const resJson = await res.json();
       const text = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
       if (text) {
-        sendResponse({ data: JSON.parse(text) });
+        try {
+          const parsed = JSON.parse(text);
+          boundedMapSet(quickLlmBackgroundCache, cacheKey, parsed, 500);
+          sendResponse({ data: parsed });
+        } catch (parseErr) {
+          sendResponse({ error: `Failed to parse response: ${parseErr.message}` });
+        }
       } else {
         sendResponse({ error: 'Empty response' });
       }
