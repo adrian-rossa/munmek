@@ -13,15 +13,26 @@
 
 ## Key Features
 
-### ⚡ Full-Power Kiwi C++ WASM Morphological Engine
+### ⚡ Kiwi C++ WASM Morphological Engine
 - **Native WebAssembly Sandbox**: Powered by `bab2min/Kiwi`, running offline in a Chrome Offscreen Document with sub-millisecond execution (<1–3 ms).
 - **Comprehensive Sejong POS Tag Coverage**: Correctly processes all Korean part-of-speech classes:
+
+  <details>
+  <summary>View POS classes</summary>
+
   - **Predicates**: Verbs (`VV`), Adjectives (`VA`), Auxiliary Verbs (`VX`), Positive/Negative Copulas (`VCP`/`VCN`).
   - **Substantives**: General Nouns (`NNG`), Proper Nouns (`NNP`), Dependent Nouns (`NNB`), Numerals (`NR`), Pronouns (`NP`).
   - **Modifiers**: General Adverbs (`MAG`), Conjunctive Adverbs (`MAJ`), Determiners/Adnominals (`MM`), Interjections (`IC`).
   - **Particles (조사)**: Subject (`JKS`), Complement (`JKC`), Adnominal (`JKG`), Object (`JKO`), Adverbial (`JKB`), Vocative (`JKV`), Quotative (`JKQ`), Auxiliary/Topic (`JX`), Conjunctive (`JC`).
   - **Affixes & Roots**: Prefixes (`XPN`), Suffixes (`XSN`, `XSV`, `XSA`), Word Roots (`XR`).
+
+  </details>
+
 - **Citation Base Form Recovery**: Restores canonical dictionary base forms for all Korean irregular verb/adjective classes:
+
+  <details>
+  <summary>View irregular verb/adjective classes</summary>
+
   - 르-irregular (`불러` $\rightarrow$ `부르다`, `골라` $\rightarrow$ `고르다`)
   - ㄷ-irregular (`들어요` $\rightarrow$ `듣다`, `걸어서` $\rightarrow$ `걷다`)
   - ㅂ-irregular (`도와` $\rightarrow$ `돕다`, `부끄러워` $\rightarrow$ `부끄럽다`, `아름다워` $\rightarrow$ `아름답다`)
@@ -29,6 +40,9 @@
   - ㅎ-irregular (`하얘` $\rightarrow$ `하얗다`, `파란` $\rightarrow$ `파랗다`)
   - ㅡ-irregular (`써서` $\rightarrow$ `쓰다`, `예뻐` $\rightarrow$ `예쁘다`)
   - ㄹ-irregular / ㄹ-drop (`사니`, `삽니다`, `사는` $\rightarrow$ `살다`)
+
+  </details>
+
 - **Compound Predicate Synthesis & Sub-Verb Decomposition**:
   - Automatically synthesizes multi-part compound predicates (`데려다` + `주다` $\rightarrow$ `데려다주다`, `빠져` + `나가다` $\rightarrow$ `빠져나가다`).
   - Decomposes single-token compound verbs (`날아오르다` $\rightarrow$ `날다`, `오르다`) and presents constituent verbs in a dedicated `[관련]` sub-row.
@@ -41,6 +55,10 @@
   - Powered by bab2min's high-performance C++ morphological analyzer compiled to WebAssembly with bundled official language models (`cong.mdl`, 75.6 MB).
   - High-precision sentence-level statistical disambiguation, irregular verb recovery, compound verb decomposition, and particle separation out-of-the-box.
 - **Stage 2 Multilingual E5 INT8 ONNX Reranker (~118 MB — Optional / Experimental)**:
+
+  <details>
+  <summary>View Reranker Explanation</summary>
+
   - Cross-lingual bi-encoder model for semantic definition sense disambiguation across English, Japanese, and other target languages.
   - Automatically highlights and pre-selects the winning definition tab based on sentence context.
   - Supports **WebGPU Hardware Acceleration** with automatic WASM SIMD CPU fallback.
@@ -48,9 +66,11 @@
   - Supports optional precomputed GPU vector imports (`.vec.bin`) for instant <5 ms offline sense matching.
   - **Lightweight Git Notice**: To keep the Git repository lightweight (<100 MB per file) and avoid Git LFS bandwidth quotas, this optional ~118 MB model is excluded from Git tracking. You can obtain it by downloading `multilingual_e5_small_int8.onnx` from [GitHub Releases](https://github.com/adrian-rossa/munmek/releases) into `lib/models/`, or generating it locally using `python scripts/export_multilingual_onnx.py`. Enable it anytime in Munmek Settings under **Developer Mode**.
 
+  </details>
+
 ### 🌐 Dynamic Multi-Dictionary & Multilingual Routing
 - **Multi-Dictionary Tabs**: Import multiple Yomitan KRDICT dictionary `.zip` files (e.g. English, Japanese, French, Spanish) and tab between them seamlessly.
-- **Automatic Language Detection**: Munmek detects the target language directly from the active dictionary tab (no manual settings dropdown required). ✨ LLM Matched` badges only attach to dictionary entries that match the language of the LLM response.
+- **Automatic Language Detection**: Munmek detects the target language directly from the active dictionary tab (no manual settings dropdown required). `✨ LLM Matched` badges only attach to dictionary entries that match the language of the LLM response.
 
 ### 🎬 Site-Aware Media Context (Netflix & YouTube)
 - **Netflix Direct Synopsis & Metadata**: Scrapes show titles, episode numbers, and direct plot synopsis straight from Netflix's DOM and media session metadata. Uses TMDB only as a secondary fallback with strict cache pollution guards.
