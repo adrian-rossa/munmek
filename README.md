@@ -1,6 +1,6 @@
 <img width="1824" height="1175" alt="whale_haEbZEHlhn-ezgif com-optimize" src="https://github.com/user-attachments/assets/8bd7b619-2fe2-4fec-a287-7985a6669b4c" />
 
-# Munmek (문맥) — Korean Context Lookup
+# <img width="80" height="80" alt="image" src="https://github.com/user-attachments/assets/e4bfd4a4-19a8-4b35-aa0d-8b5560a178b6"/> Munmek (문맥) — Korean Context Lookup
 
 **Munmek** is a Chromium browser extension for fast, context-aware Korean word lookups. It solves the language ambiguity and complex conjugations that make Korean difficult for learners. By combining a local offline termbank engine (supporting Yomitan / KRDICT imports), the native C++ **Kiwi** WebAssembly morphological analyzer, neural KoELECTRA candidate reranking, and an optional Multilingual E5 cross-lingual sense disambiguation model, Munmek provides instant, accurate dictionary headwords and definitions. It also features automated video subtitle extraction (Netflix, YouTube, ASBPlayer), adaptive multilingual LLM explanations, and 1-click AnkiConnect flashcard exports.
 
