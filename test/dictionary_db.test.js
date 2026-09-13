@@ -49,6 +49,21 @@ describe('DictionaryDB Yomichan / KRDICT Item Parser', () => {
     expect(entry.definitions).toContain('よぶ【呼ぶ】');
   });
 
+  it('decodes HTML entities like &quot; in definitions upon parsing', () => {
+    const rawItem = [
+      '-하다',
+      '-하다',
+      'suffix',
+      '',
+      0,
+      ['-hada A suffix that means &quot;to act that way&quot; or &quot;to do an act related to something,&quot; and makes the word a verb.']
+    ];
+    const entry = globalThis.DictionaryDB.parseKrdictTermItem(rawItem, 'test_id_entity');
+    expect(entry).not.toBeNull();
+    expect(entry.definitions[0]).toContain('"to act that way"');
+    expect(entry.definitions[0]).not.toContain('&quot;');
+  });
+
   it('returns null for malformed item arrays', () => {
     const entry = globalThis.DictionaryDB.parseKrdictTermItem(['invalid'], 'test_id_3');
     expect(entry).toBeNull();
@@ -226,5 +241,86 @@ describe('splitEmbeddedDefinitions KRDICT Parser', () => {
     expect(split[0]).toContain('(Pattern: 1이 2를 부르다)');
     expect(split[1]).toContain('call out; check; do');
     expect(split[2]).toContain('sing');
+  });
+});
+
+describe('Yomitan Advanced Features: Score, Sequence Merging, Ruby, & Intra-Dict Ranking', () => {
+  it('parses Yomitan 8-element term bank arrays including score, sequence, and term tags', () => {
+    const rawItem = ['과거', '과거', 'noun', '', 500, ['past'], 12345, 'common'];
+    const entry = globalThis.DictionaryDB.parseKrdictTermItem(rawItem, 'test_item_8');
+
+    expect(entry).not.toBeNull();
+    expect(entry.surface).toBe('과거');
+    expect(entry.score).toBe(500);
+    expect(entry.sequence).toBe(12345);
+    expect(entry.termTags).toBe('common');
+    expect(entry.definitions).toEqual(['past']);
+  });
+
+  it('converts structured content with ruby and rt into HTML markup', () => {
+    const structuredNode = {
+      tag: 'li',
+      content: [
+        {
+          tag: 'ruby',
+          content: [
+            '過去',
+            { tag: 'rt', content: 'かこ' }
+          ]
+        },
+        '：すぎ去った時。'
+      ]
+    };
+
+    const defs = globalThis.DictionaryDB.extractDefinitionsFromStructuredContent(structuredNode);
+    expect(defs.length).toBe(1);
+    expect(defs[0]).toBe('<ruby>過去<rt>かこ</rt></ruby>：すぎ去った時。');
+  });
+
+  it('merges multi-row entries sharing the same sequence number into a single multi-sense card', () => {
+    const entries = [
+      {
+        id: 'entry_1',
+        dictId: 'dict_jp',
+        surface: '과거',
+        reading: '과거',
+        pos: '명사',
+        score: 400,
+        sequence: 777,
+        hanja: '〔過去〕',
+        definitions: ['すぎ去った時。']
+      },
+      {
+        id: 'entry_2',
+        dictId: 'dict_jp',
+        surface: '과거',
+        reading: '과거',
+        pos: '명사',
+        score: 500, // Higher score should be kept
+        sequence: 777,
+        hanja: '',
+        definitions: ['昔のこと。前世。']
+      }
+    ];
+
+    const merged = globalThis.DictionaryDB.mergeSequencedEntries(entries);
+    expect(merged.length).toBe(1);
+    expect(merged[0].surface).toBe('과거');
+    expect(merged[0].score).toBe(500);
+    expect(merged[0].hanja).toBe('〔過去〕');
+    expect(merged[0].definitions).toEqual(['すぎ去った時。', '昔のこと。前世。']);
+  });
+
+  it('ranks entries with higher Yomichan score first within the same dictionary priority', () => {
+    const hits = [
+      { dictId: 'krdict_ja', surface: '과거', score: 10, definitions: ['かきょ【科挙】'] },
+      { dictId: 'krdict_ja', surface: '과거', score: 500, definitions: ['かこ【過去】'] },
+      { dictId: 'krdict_ja', surface: '과거', score: 100, definitions: ['かこ【過誤】'] }
+    ];
+
+    const sorted = globalThis.DictionaryDB.sortHitsByDictOrder(hits, ['krdict_ja']);
+    expect(sorted[0].definitions[0]).toBe('かこ【過去】'); // 500 score
+    expect(sorted[1].definitions[0]).toBe('かこ【過誤】'); // 100 score
+    expect(sorted[2].definitions[0]).toBe('かきょ【科挙】'); // 10 score
   });
 });

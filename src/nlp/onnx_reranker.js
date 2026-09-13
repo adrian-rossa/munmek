@@ -750,6 +750,7 @@
   function cleanDefinitionForEmbedding(text) {
     if (!text || typeof text !== 'string') return '';
     return text
+      .replace(/<r[tp][^>]*>.*?<\/r[tp]>/gi, '') // Strip ruby reading annotations
       .replace(/<[^>]*>/g, '') // Strip HTML tags
       .replace(/\s*(Sentence|Grammar|Pattern|文型)\s*:.*$/gi, '') // Strip trailing grammar pattern lines
       .replace(/\s+/g, ' ')

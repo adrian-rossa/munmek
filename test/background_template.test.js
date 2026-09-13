@@ -17,6 +17,7 @@ function buildTemplateContext(data) {
     notes: analysis.notes || dictionaryEntry.grammar_notes || '',
     sentence: data.sentence || '',
     prevSentence: data.prevSentence || '',
+    prevSentence2: data.prevSentence2 || '',
     nextSentence: data.nextSentence || '',
     candidate: data.candidate || '',
     analysisJson: analysis ? JSON.stringify(analysis, null, 2) : ''
@@ -59,6 +60,20 @@ describe('Background Template & Dynamic Context Rendering', () => {
     const rendered = renderTemplate('Front: {{word}}, Base: {{base}}, Def: {{definition}}', ctx);
 
     expect(rendered).toBe('Front: 인구는, Base: 인구, Def: population');
+  });
+
+  it('renders candidate and preceding sentence placeholders correctly', () => {
+    const data = {
+      word: '악당티가',
+      candidate: '티',
+      sentence: '그런 악당티가 난다는 거지?',
+      prevSentence: '첫 번째 문장입니다.',
+      prevSentence2: '시작 문장입니다.'
+    };
+    const ctx = buildTemplateContext(data);
+    const rendered = renderTemplate('Surface: {{word}}, Candidate: {{candidate}}, Prev1: {{prevSentence}}, Prev2: {{prevSentence2}}', ctx);
+
+    expect(rendered).toBe('Surface: 악당티가, Candidate: 티, Prev1: 첫 번째 문장입니다., Prev2: 시작 문장입니다.');
   });
 
   it('dynamically renders custom LLM JSON fields in template placeholders', () => {

@@ -82,7 +82,11 @@
     if (cachedDictMap) return cachedDictMap;
     try {
       const dicts = await getDictionaries();
-      cachedDictMap = new Map(dicts.map((d) => [d.id, d.title]));
+      cachedDictMap = new Map(dicts.map((d) => [d.id, {
+        title: d.title,
+        targetLanguage: d.targetLanguage || '',
+        sourceLanguage: d.sourceLanguage || 'kor'
+      }]));
     } catch (e) {
       cachedDictMap = new Map();
     }
@@ -94,25 +98,73 @@
   }
 
   function sortHitsByDictOrder(hits, dictOrder) {
-    if (!Array.isArray(dictOrder) || dictOrder.length === 0 || !Array.isArray(hits)) return hits;
+    if (!Array.isArray(hits)) return hits;
+    if (!Array.isArray(dictOrder) || dictOrder.length === 0) {
+      return hits.sort((a, b) => (b.score || 0) - (a.score || 0));
+    }
     return hits.sort((a, b) => {
       const idxA = dictOrder.indexOf(a.dictId);
       const idxB = dictOrder.indexOf(b.dictId);
       const rankA = idxA === -1 ? 999 : idxA;
       const rankB = idxB === -1 ? 999 : idxB;
-      return rankA - rankB;
+      if (rankA !== rankB) {
+        return rankA - rankB;
+      }
+      return (b.score || 0) - (a.score || 0);
     });
   }
 
-  async function insertEntries(entries, dictId = 'default_dict', dictTitle = 'Imported Dictionary') {
+  function mergeSequencedEntries(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) return [];
+    const sequencedMap = new Map();
+    const result = [];
+
+    for (const entry of entries) {
+      if (entry && entry.sequence !== null && entry.sequence !== undefined && entry.sequence !== '') {
+        const groupKey = `${entry.dictId || ''}__${entry.surface || entry.word || ''}__${entry.reading || ''}__${entry.sequence}`;
+        const existing = sequencedMap.get(groupKey);
+        if (existing) {
+          const combinedDefs = Array.isArray(existing.definitions) ? [...existing.definitions] : [];
+          const newDefs = Array.isArray(entry.definitions) ? entry.definitions : [];
+          newDefs.forEach((d) => {
+            if (!combinedDefs.includes(d)) combinedDefs.push(d);
+          });
+          existing.definitions = combinedDefs.slice(0, 15);
+          if ((entry.score || 0) > (existing.score || 0)) {
+            existing.score = entry.score;
+          }
+          if (!existing.hanja && entry.hanja) {
+            existing.hanja = entry.hanja;
+          }
+          if (!existing.pos && entry.pos) {
+            existing.pos = entry.pos;
+          }
+          if (entry.termTags) {
+            existing.termTags = existing.termTags ? `${existing.termTags} ${entry.termTags}` : entry.termTags;
+          }
+        } else {
+          sequencedMap.set(groupKey, entry);
+          result.push(entry);
+        }
+      } else {
+        result.push(entry);
+      }
+    }
+    return result;
+  }
+
+  async function insertEntries(entries, dictId = 'default_dict', dictTitle = 'Imported Dictionary', dictMeta = {}) {
     if (!Array.isArray(entries) || entries.length === 0) return 0;
     const db = await openDB();
 
+    const mergedEntries = mergeSequencedEntries(entries);
     const BATCH_SIZE = 5000;
     let totalInserted = 0;
+    const targetLang = dictMeta.targetLanguage || entries[0]?.dictTargetLanguage || '';
+    const sourceLang = dictMeta.sourceLanguage || entries[0]?.dictSourceLanguage || 'kor';
 
-    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-      const chunk = entries.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < mergedEntries.length; i += BATCH_SIZE) {
+      const chunk = mergedEntries.slice(i, i + BATCH_SIZE);
       await new Promise((resolve, reject) => {
         const tx = db.transaction([STORE_WORDS, STORE_DICTS], 'readwrite');
         const wordStore = tx.objectStore(STORE_WORDS);
@@ -122,19 +174,23 @@
           const entryToSave = {
             ...item,
             dictId: item.dictId || dictId,
-            dictTitle: item.dictTitle || dictTitle
+            dictTitle: item.dictTitle || dictTitle,
+            dictTargetLanguage: item.dictTargetLanguage || targetLang,
+            dictSourceLanguage: item.dictSourceLanguage || sourceLang
           };
           wordStore.put(entryToSave);
           totalInserted++;
         }
 
-        if (i + BATCH_SIZE >= entries.length) {
+        if (i + BATCH_SIZE >= mergedEntries.length) {
           const countReq = wordStore.index('dictId').count(dictId);
           countReq.onsuccess = () => {
             const totalForDict = countReq.result || totalInserted;
             dictStore.put({
               id: dictId,
               title: dictTitle,
+              sourceLanguage: sourceLang,
+              targetLanguage: targetLang,
               wordCount: totalForDict,
               updatedAt: Date.now()
             });
@@ -199,10 +255,18 @@
           hits = hits.filter((item) => item.dictId === filterDictId);
         }
 
-        hits = hits.map((item) => ({
-          ...item,
-          dictTitle: item.dictTitle || dictMap.get(item.dictId) || 'Imported Dictionary'
-        }));
+        hits = hits.map((item) => {
+          const dictInfo = dictMap.get(item.dictId);
+          const title = item.dictTitle || (dictInfo && dictInfo.title) || (typeof dictInfo === 'string' ? dictInfo : 'Imported Dictionary');
+          const targetLang = item.dictTargetLanguage || (dictInfo && dictInfo.targetLanguage) || '';
+          const sourceLang = item.dictSourceLanguage || (dictInfo && dictInfo.sourceLanguage) || 'kor';
+          return {
+            ...item,
+            dictTitle: title,
+            dictTargetLanguage: targetLang,
+            dictSourceLanguage: sourceLang
+          };
+        });
 
         resolve(sortHitsByDictOrder(hits, dictOrder));
       };
@@ -227,14 +291,42 @@
           hits = hits.filter((item) => item.dictId === filterDictId);
         }
 
-        hits = hits.map((item) => ({
-          ...item,
-          dictTitle: item.dictTitle || dictMap.get(item.dictId) || 'Imported Dictionary'
-        }));
+        hits = hits.map((item) => {
+          const dictInfo = dictMap.get(item.dictId);
+          const title = item.dictTitle || (dictInfo && dictInfo.title) || (typeof dictInfo === 'string' ? dictInfo : 'Imported Dictionary');
+          const targetLang = item.dictTargetLanguage || (dictInfo && dictInfo.targetLanguage) || '';
+          const sourceLang = item.dictSourceLanguage || (dictInfo && dictInfo.sourceLanguage) || 'kor';
+          return {
+            ...item,
+            dictTitle: title,
+            dictTargetLanguage: targetLang,
+            dictSourceLanguage: sourceLang
+          };
+        });
 
         resolve(sortHitsByDictOrder(hits, dictOrder));
       };
       req.onerror = () => reject(req.error);
+    });
+  }
+
+  function decodeHtmlEntities(str) {
+    if (!str || typeof str !== 'string' || !str.includes('&')) return str || '';
+    return str.replace(/&(?:quot|apos|#39|#039|lt|gt|nbsp|amp|#(\d+)|#x([0-9a-fA-F]+));/gi, (match, dec, hex) => {
+      if (dec) return String.fromCharCode(parseInt(dec, 10));
+      if (hex) return String.fromCharCode(parseInt(hex, 16));
+      const lower = match.toLowerCase();
+      switch (lower) {
+        case '&quot;': return '"';
+        case '&apos;':
+        case '&#39;':
+        case '&#039;': return "'";
+        case '&lt;': return '<';
+        case '&gt;': return '>';
+        case '&nbsp;': return ' ';
+        case '&amp;': return '&';
+        default: return match;
+      }
     });
   }
 
@@ -244,23 +336,40 @@
     const expression = item[0] || '';
     const reading = item[1] || '';
     const posTag = item[2] || '';
-    const rawContent = item[5] !== undefined ? item[5] : item[4];
+    
+    // Yomichan schema: item[4] is score (integer), item[5] is definitions, item[6] is sequence, item[7] is term tags
+    let score = 0;
+    let rawContent = null;
+    if (item.length > 5) {
+      score = typeof item[4] === 'number' ? item[4] : 0;
+      rawContent = item[5];
+    } else {
+      if (typeof item[4] === 'number') {
+        score = item[4];
+        rawContent = [];
+      } else {
+        rawContent = item[4];
+        score = 0;
+      }
+    }
+    const sequence = typeof item[6] === 'number' ? item[6] : null;
+    const termTags = typeof item[7] === 'string' ? item[7] : '';
 
     if (!expression) return null;
 
     let rawStrings = [];
     if (typeof rawContent === 'string' && rawContent.trim()) {
-      rawStrings = [rawContent.trim()];
+      rawStrings = [decodeHtmlEntities(rawContent.trim())];
     } else if (Array.isArray(rawContent)) {
       rawContent.forEach((entry) => {
         if (typeof entry === 'string' && entry.trim()) {
-          rawStrings.push(entry.trim());
+          rawStrings.push(decodeHtmlEntities(entry.trim()));
         } else if (Array.isArray(entry) || (typeof entry === 'object' && entry !== null)) {
-          rawStrings.push(...extractDefinitionsFromStructuredContent(entry));
+          rawStrings.push(...extractDefinitionsFromStructuredContent(entry).map(decodeHtmlEntities));
         }
       });
     } else if (typeof rawContent === 'object' && rawContent !== null) {
-      rawStrings = extractDefinitionsFromStructuredContent(rawContent);
+      rawStrings = extractDefinitionsFromStructuredContent(rawContent).map(decodeHtmlEntities);
     }
 
     let extractedHanja = '';
@@ -296,8 +405,8 @@
           continue;
         }
 
-        // Clean leading list numbers like "1. " or "1) " if followed by definition text
-        subTrimmed = subTrimmed.replace(/^[\d]+[\.\)]\s*/, '').trim();
+        // Clean leading list numbers like "1. ", "1) ", or "1 1. " if followed by definition text
+        subTrimmed = subTrimmed.replace(/^(\s*\d{1,3}(?:[\.\)]\s*|\s+))+/, '').trim();
 
         // Format transitions between lowercase/Korean and uppercase words (e.g., "gestureTo ask" -> "gesture\nTo ask")
         subTrimmed = subTrimmed.replace(/(?<=[a-z가-힣])(?=[A-Z])/g, '\n');
@@ -316,7 +425,9 @@
 
     let finalDefs = uniqueDefs;
     if (finalDefs.length === 0) {
-      if (typeof item[4] === 'string' && item[4].trim()) {
+      if (typeof rawContent === 'string' && rawContent.trim()) {
+        finalDefs = [rawContent.trim()];
+      } else if (typeof item[4] === 'string' && item[4].trim()) {
         finalDefs = [item[4].trim()];
       } else {
         finalDefs = [expression];
@@ -329,6 +440,9 @@
       base: expression,
       reading,
       pos: posTag,
+      score,
+      sequence,
+      termTags,
       hanja: extractedHanja,
       definitions: finalDefs.slice(0, 15)
     };
@@ -337,14 +451,38 @@
   function extractDefinitionsFromStructuredContent(contentObj) {
     const textDefs = [];
 
-    function getNodeText(node) {
+    const BLOCK_TAGS = new Set(['li', 'p', 'tr', 'dt', 'dd']);
+    const CONTAINER_TAGS = new Set(['ul', 'ol', 'dl', 'table', 'tbody', 'thead', 'div', 'section', 'article', 'header']);
+    const ALLOWED_INLINE_TAGS = new Set(['ruby', 'rt', 'rp', 'b', 'strong', 'i', 'em', 'u', 's', 'sub', 'sup']);
+
+    function containsBlockTags(node) {
+      if (!node) return false;
+      if (Array.isArray(node)) return node.some(containsBlockTags);
+      if (typeof node === 'object') {
+        const tag = (node.tag || '').toLowerCase();
+        if (BLOCK_TAGS.has(tag) || CONTAINER_TAGS.has(tag)) return true;
+        if (node.content) return containsBlockTags(node.content);
+      }
+      return false;
+    }
+
+    function serializeToHtml(node) {
       if (!node) return '';
       if (typeof node === 'string') return node;
       if (typeof node === 'number') return String(node);
-      if (Array.isArray(node)) return node.map(getNodeText).filter(Boolean).join(' ');
+      if (Array.isArray(node)) {
+        return node.map(serializeToHtml).join('');
+      }
       if (typeof node === 'object') {
-        if (node.text) return String(node.text);
-        if (node.content) return getNodeText(node.content);
+        const tag = (node.tag || '').toLowerCase();
+        const inner = node.content ? serializeToHtml(node.content) : (node.text ? String(node.text) : '');
+        if (ALLOWED_INLINE_TAGS.has(tag)) {
+          return `<${tag}>${inner}</${tag}>`;
+        }
+        if (tag === 'br') {
+          return '<br>';
+        }
+        return inner;
       }
       return '';
     }
@@ -352,7 +490,7 @@
     function processNode(node) {
       if (!node) return;
       if (typeof node === 'string') {
-        const trimmed = node.trim();
+        const trimmed = decodeHtmlEntities(node.trim());
         if (trimmed && !trimmed.startsWith('{') && !trimmed.endsWith('}')) {
           textDefs.push(trimmed);
         }
@@ -363,17 +501,29 @@
         return;
       }
       if (typeof node === 'object') {
-        if (node.tag === 'li' || node.tag === 'p' || node.tag === 'div' || node.tag === 'ol' || node.tag === 'ul') {
-          if (node.content && Array.isArray(node.content)) {
-            node.content.forEach(processNode);
+        const tag = (node.tag || '').toLowerCase();
+        if (BLOCK_TAGS.has(tag)) {
+          if (node.content && containsBlockTags(node.content)) {
+            processNode(node.content);
           } else {
-            const txt = getNodeText(node).trim();
-            if (txt) textDefs.push(txt);
+            const html = decodeHtmlEntities(serializeToHtml(node.content || node.text).trim());
+            if (html) textDefs.push(html);
           }
-        } else if (node.content) {
+          return;
+        }
+        if (CONTAINER_TAGS.has(tag) || node.type === 'structured-content') {
+          if (node.content && containsBlockTags(node.content)) {
+            processNode(node.content);
+          } else {
+            const html = decodeHtmlEntities(serializeToHtml(node.content || node.text).trim());
+            if (html) textDefs.push(html);
+          }
+          return;
+        }
+        if (node.content) {
           processNode(node.content);
-        } else {
-          const txt = getNodeText(node).trim();
+        } else if (node.text) {
+          const txt = decodeHtmlEntities(String(node.text).trim());
           if (txt) textDefs.push(txt);
         }
       }
@@ -501,11 +651,15 @@
     lookupSurface,
     lookupBase,
     parseKrdictTermItem,
+    extractDefinitionsFromStructuredContent,
+    mergeSequencedEntries,
+    sortHitsByDictOrder,
     getEntriesForDict,
     updateEntriesBatch,
     markDictPrecomputed,
     removePrecomputedVectors,
-    importPrecomputedVectorsForDict
+    importPrecomputedVectorsForDict,
+    decodeHtmlEntities
   };
 
   const targetGlobal = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : global);

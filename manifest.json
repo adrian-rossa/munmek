@@ -5,7 +5,7 @@
   "description": "Korean hover lookup with local dictionary ranking, optional Gemini explanations, and AnkiConnect exports.",
   "author": "Adrian Rossa",
   "homepage_url": "https://github.com/adrian-rossa/munmek#readme",
-  "permissions": ["storage", "offscreen"],
+  "permissions": ["storage", "offscreen", "scripting"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
@@ -39,8 +39,9 @@
   "options_page": "src/options/options.html",
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*",
-    "http://127.0.0.1:8765/*",
-    "http://localhost:8765/*"
+    "https://api.themoviedb.org/*",
+    "http://*/*",
+    "https://*/*"
   ],
   "icons": {
     "16": "assets/icon16.png",
@@ -55,8 +56,11 @@
         "korean_words.json",
         "src/offscreen/offscreen.html",
         "src/offscreen/offscreen.js",
-        "src/offscreen/offscreen_bridge.js",
-        "lib/garu/*",
+        "src/nlp/kiwi_bridge.js",
+        "lib/kiwi/*",
+        "node_modules/kiwi-nlp/*",
+        "node_modules/kiwi-nlp/dist/*",
+        "node_modules/kiwi-nlp/dist/build/*",
         "lib/onnx/*",
         "lib/models/*"
       ],

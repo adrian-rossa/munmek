@@ -28,6 +28,8 @@
   let currentSelectedDictionaryId = 'all';
   let currentTooltipFontSize = 15;
   let enableStage2Reranker = true;
+  let autoTriggerAiOnHover = false;
+  let autoAiDebounceTimer = null;
   const subtitleHistoryBuffer = [];
   let _asbObserver = null;
   let _asbContainerEl = null;
@@ -85,7 +87,7 @@
     if (_asbScanInterval) { clearInterval(_asbScanInterval); _asbScanInterval = null; }
   }
 
-  let extensionEnabled = true;
+  let extensionEnabled = false;
 
   function init() {
     attachHoverListeners(document);
@@ -96,24 +98,32 @@
 
     _asbScanInterval = setInterval(findAndObserveAsbPlayer, 3000);
 
+    // Query per-tab session status from background service worker
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'getTabSessionStatus' }, (res) => {
+        if (res && typeof res.isActive === 'boolean') {
+          extensionEnabled = res.isActive;
+        }
+      });
+    }
+
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize', 'extensionEnabled', 'enableOnnxReranker'], (res) => {
+      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize', 'enableOnnxReranker', 'autoTriggerAiOnHover'], (res) => {
         if (res.modifierKey !== undefined) currentModifierKey = res.modifierKey;
         if (res.selectedDictionaryId) currentSelectedDictionaryId = res.selectedDictionaryId;
         if (res.tooltipFontSize) currentTooltipFontSize = Number(res.tooltipFontSize) || 15;
-        if (res.extensionEnabled !== undefined) extensionEnabled = Boolean(res.extensionEnabled);
         if (res.enableOnnxReranker !== undefined) enableStage2Reranker = Boolean(res.enableOnnxReranker);
+        if (res.autoTriggerAiOnHover !== undefined) autoTriggerAiOnHover = Boolean(res.autoTriggerAiOnHover);
       });
 
       if (chrome.storage.onChanged) {
         chrome.storage.onChanged.addListener((changes, areaName) => {
           if (areaName === 'local') {
-            if (changes.extensionEnabled) {
-              extensionEnabled = Boolean(changes.extensionEnabled.newValue);
-              if (!extensionEnabled) scheduleHideTooltip();
-            }
             if (changes.enableOnnxReranker !== undefined) {
               enableStage2Reranker = Boolean(changes.enableOnnxReranker.newValue);
+            }
+            if (changes.autoTriggerAiOnHover !== undefined) {
+              autoTriggerAiOnHover = Boolean(changes.autoTriggerAiOnHover.newValue);
             }
             if (changes.modifierKey) currentModifierKey = changes.modifierKey.newValue || 'Shift';
             if (changes.selectedDictionaryId) currentSelectedDictionaryId = changes.selectedDictionaryId.newValue || 'all';
@@ -145,6 +155,7 @@
           lastTooltipPosition.y
         );
         rerenderCurrentTooltip();
+        triggerIndexedDbLookup(currentHoverState);
       }
     });
   }
@@ -278,6 +289,21 @@
     rerenderCurrentTooltip();
     triggerIndexedDbLookup(hoverState);
     triggerProgressiveReranking(hoverState);
+    scheduleAutoAiAnalysis(hoverState);
+  }
+
+  function scheduleAutoAiAnalysis(hoverState) {
+    if (!autoTriggerAiOnHover || !hoverState || !hoverState.sentence) return;
+    if (autoAiDebounceTimer) {
+      clearTimeout(autoAiDebounceTimer);
+      autoAiDebounceTimer = null;
+    }
+    const targetState = hoverState;
+    autoAiDebounceTimer = setTimeout(() => {
+      if (currentHoverState && currentHoverState.word === targetState.word && currentHoverState.sentenceKey === targetState.sentenceKey) {
+        requestSentenceAnalysis(currentHoverState);
+      }
+    }, 250);
   }
 
   function getRangeFromPoint(doc, x, y) {
@@ -444,9 +470,66 @@
   }
 
   const stage2RerankCache = new Map();
+  const dictPresenceCache = new Map();
+
+  async function checkCandidateDictionaryStatus(state) {
+    if (!state || !Array.isArray(state.candidateList) || state.candidateList.length === 0) return;
+    if (!state.verifiedDictionaryCandidates) {
+      state.verifiedDictionaryCandidates = new Set();
+    }
+    const topCandidates = state.candidateList.slice(0, 6);
+    let hasChanges = false;
+
+    for (const c of topCandidates) {
+      if (dictPresenceCache.has(c.text)) {
+        const hasDict = dictPresenceCache.get(c.text);
+        if (hasDict) {
+          state.verifiedDictionaryCandidates.add(c.text);
+        }
+        c.isLlmFallback = !hasDict;
+        continue;
+      }
+
+      try {
+        let res = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({
+            type: 'dictionaryLookup',
+            method: 'lookupSurface',
+            text: c.text,
+            dictId: currentSelectedDictionaryId
+          }, resolve);
+        });
+
+        let hasHits = res && Array.isArray(res.hits) && res.hits.length > 0;
+        if (!hasHits) {
+          let resBase = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+              type: 'dictionaryLookup',
+              method: 'lookupBase',
+              text: c.text,
+              dictId: currentSelectedDictionaryId
+            }, resolve);
+          });
+          hasHits = resBase && Array.isArray(resBase.hits) && resBase.hits.length > 0;
+        }
+
+        dictPresenceCache.set(c.text, Boolean(hasHits));
+        if (hasHits) {
+          state.verifiedDictionaryCandidates.add(c.text);
+        }
+        c.isLlmFallback = !hasHits;
+        hasChanges = true;
+      } catch (err) {}
+    }
+
+    if (hasChanges && currentHoverState && currentHoverState.word === state.word) {
+      rerenderCurrentTooltip();
+    }
+  }
 
   async function triggerIndexedDbLookup(state) {
     if (!state || !state.word) return;
+    checkCandidateDictionaryStatus(state).catch(() => {});
 
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
       try {
@@ -819,8 +902,36 @@
       const idx = parseInt(actionEl.getAttribute('data-group-index'), 10);
       currentHoverState.selectedGroupIndex = idx;
       const dictGroups = window.MunmekUI ? window.MunmekUI.groupEntriesByDictTitle(currentHoverState.dictionaryEntries || []) : [];
-      if (dictGroups[idx] && dictGroups[idx].items[0]) {
-        currentHoverState.dictionaryEntry = dictGroups[idx].items[0];
+      const activeGroup = dictGroups[idx];
+      const targetLang = (window.MunmekUI && typeof window.MunmekUI.getDictionaryLanguage === 'function')
+        ? window.MunmekUI.getDictionaryLanguage(activeGroup)
+        : 'English';
+
+      // Check if we have cached analysis for this target language!
+      const langKey = `${currentHoverState.sentenceKey}__${targetLang}`;
+      if (sentenceAnalysisCache.has(langKey)) {
+        const cached = sentenceAnalysisCache.get(langKey);
+        currentHoverState.currentAnalysis = cached;
+        currentHoverState.currentAnalysisLanguage = targetLang;
+        if (window.MunmekUI) window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, cached);
+      } else if (targetLang === 'English' && sentenceAnalysisCache.has(currentHoverState.sentenceKey)) {
+        const cached = sentenceAnalysisCache.get(currentHoverState.sentenceKey);
+        currentHoverState.currentAnalysis = cached;
+        currentHoverState.currentAnalysisLanguage = 'English';
+        if (window.MunmekUI) window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, cached);
+      } else {
+        // If no analysis for this language yet, re-evaluate so no badge is placed for non-matching language
+        if (currentHoverState.currentAnalysis && window.MunmekUI) {
+          window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, currentHoverState.currentAnalysis);
+        }
+      }
+
+      if (activeGroup && activeGroup.items.length > 0) {
+        const groupMatch = currentHoverState.geminiMatchesByGroup && currentHoverState.geminiMatchesByGroup[idx];
+        const targetItemIdx = (groupMatch && groupMatch.matched && typeof groupMatch.itemIndex === 'number' && activeGroup.items[groupMatch.itemIndex])
+          ? groupMatch.itemIndex
+          : 0;
+        currentHoverState.dictionaryEntry = activeGroup.items[targetItemIdx];
       }
       rerenderCurrentTooltip();
       return;
@@ -847,8 +958,60 @@
       return;
     }
 
+    if (action === 'toggle-def') {
+      const targetId = actionEl.getAttribute('data-target');
+      if (targetId) {
+        const hiddenEl = document.getElementById(targetId);
+        if (hiddenEl) {
+          const isHidden = hiddenEl.style.display === 'none';
+          hiddenEl.style.display = isHidden ? 'block' : 'none';
+          actionEl.textContent = isHidden ? 'Show fewer definitions ▴' : actionEl.getAttribute('data-show-text') || 'Show all definitions ▾';
+        }
+      }
+      return;
+    }
+
+    if (action === 'analyze-lang') {
+      const requestedLang = actionEl.getAttribute('data-lang') || 'English';
+      requestSentenceAnalysis(currentHoverState, null, true, requestedLang);
+      return;
+    }
+
     if (action === 'analyze') {
-      requestSentenceAnalysis(currentHoverState, null, true);
+      const requestedLang = actionEl.getAttribute('data-lang') || null;
+      requestSentenceAnalysis(currentHoverState, null, true, requestedLang);
+      return;
+    }
+
+    if (action === 'ask-followup') {
+      const box = rawTarget.closest('.munmek-followup-box');
+      const inputEl = box?.querySelector('.munmek-followup-input');
+      const respEl = box?.querySelector('.munmek-followup-response');
+      const question = inputEl?.value?.trim();
+      if (!question || !respEl) return;
+
+      respEl.style.display = 'block';
+      respEl.textContent = 'Thinking...';
+
+      const cachedAnalysis = sentenceAnalysisCache.get(currentHoverState.sentenceKey);
+
+      chrome.runtime.sendMessage({
+        type: 'askGeminiFollowup',
+        data: {
+          question,
+          word: currentHoverState.word,
+          sentence: currentHoverState.sentence,
+          previousAnalysis: cachedAnalysis || currentHoverState.quickFallback || null
+        }
+      }, (res) => {
+        if (res && res.data && res.data.answer) {
+          respEl.textContent = res.data.answer;
+          if (inputEl) inputEl.value = '';
+        } else {
+          respEl.textContent = res?.error || 'Failed to get follow-up answer.';
+        }
+      });
+      return;
     }
 
     if (action === 'anki' || action === 'anki-dict') {
@@ -952,42 +1115,67 @@
     }
   }
 
-  function requestSentenceAnalysis(state, onSuccess = null, forceRefresh = false) {
+  function requestSentenceAnalysis(state, onSuccess = null, forceRefresh = false, requestedLang = null) {
     if (!state) return;
+
+    const dictGroups = (window.MunmekUI && Array.isArray(state.dictionaryEntries))
+      ? window.MunmekUI.groupEntriesByDictTitle(state.dictionaryEntries)
+      : [];
+    const activeGroup = dictGroups[state.selectedGroupIndex || 0];
+    const resolvedLang = requestedLang || ((window.MunmekUI && typeof window.MunmekUI.getDictionaryLanguage === 'function')
+      ? window.MunmekUI.getDictionaryLanguage(activeGroup)
+      : 'English');
+
+    const cacheLangKey = `${state.sentenceKey}__${resolvedLang}`;
+
     if (forceRefresh && state.sentenceKey) {
-      sentenceAnalysisCache.delete(state.sentenceKey);
+      sentenceAnalysisCache.delete(cacheLangKey);
+      if (resolvedLang === 'English') {
+        sentenceAnalysisCache.delete(state.sentenceKey);
+      }
     }
 
-    if (!forceRefresh && sentenceAnalysisCache.has(state.sentenceKey) && !pendingAnalysisRequests.has(state.sentenceKey)) {
-      const cached = sentenceAnalysisCache.get(state.sentenceKey);
+    if (!forceRefresh && sentenceAnalysisCache.has(cacheLangKey) && !pendingAnalysisRequests.has(cacheLangKey)) {
+      const cached = sentenceAnalysisCache.get(cacheLangKey);
+      state.currentAnalysis = cached;
+      state.currentAnalysisLanguage = resolvedLang;
       autoSelectBestDefinitionFromGemini(state, cached);
-      currentHoverState.feedback = 'Using cached Gemini analysis for this sentence.';
-      currentHoverState.feedbackType = 'info';
+      currentHoverState.feedback = '';
+      rerenderCurrentTooltip();
+      if (typeof onSuccess === 'function') onSuccess();
+      return;
+    } else if (!forceRefresh && resolvedLang === 'English' && sentenceAnalysisCache.has(state.sentenceKey) && !pendingAnalysisRequests.has(state.sentenceKey)) {
+      const cached = sentenceAnalysisCache.get(state.sentenceKey);
+      state.currentAnalysis = cached;
+      state.currentAnalysisLanguage = 'English';
+      autoSelectBestDefinitionFromGemini(state, cached);
+      currentHoverState.feedback = '';
       rerenderCurrentTooltip();
       if (typeof onSuccess === 'function') onSuccess();
       return;
     }
 
-    if (pendingAnalysisRequests.has(state.sentenceKey)) {
-      currentHoverState.feedback = 'Gemini analysis is already in progress.';
+    if (pendingAnalysisRequests.has(cacheLangKey) || pendingAnalysisRequests.has(state.sentenceKey)) {
+      currentHoverState.feedback = `LLM analysis (${resolvedLang}) is already in progress.`;
       currentHoverState.feedbackType = 'info';
       rerenderCurrentTooltip();
       return;
     }
 
-    currentHoverState.feedback = 'Loading Gemini analysis...';
-    currentHoverState.feedbackType = 'info';
-    rerenderCurrentTooltip();
-
-    pendingAnalysisRequests.set(state.sentenceKey, true);
+    pendingAnalysisRequests.set(cacheLangKey, true);
 
     console.log('[Munmek SubtitleContextSent]', {
       word: state.word,
       sentence: state.sentence,
       prevSentence: state.prevSentence || '(none)',
       prevSentence2: state.prevSentence2 || '(none)',
-      isAsbplayerSubtitle: Boolean(state.isAsbplayerSubtitle)
+      isAsbplayerSubtitle: Boolean(state.isAsbplayerSubtitle),
+      responseLanguage: resolvedLang
     });
+
+    currentHoverState.isAiLoading = true;
+    currentHoverState.feedback = '';
+    rerenderCurrentTooltip();
 
     chrome.runtime.sendMessage(
       {
@@ -998,16 +1186,18 @@
           prevSentence: state.prevSentence,
           prevSentence2: state.prevSentence2,
           dictionaryEntry: state.dictionaryEntry,
-          candidate: state.dictionaryMatch
+          candidate: state.dictionaryMatch,
+          responseLanguage: resolvedLang
         }
       },
       (response) => {
-        pendingAnalysisRequests.delete(state.sentenceKey);
+        pendingAnalysisRequests.delete(cacheLangKey);
+        if (currentHoverState) currentHoverState.isAiLoading = false;
 
         if (chrome.runtime.lastError || !response || response.error) {
-          let errMsg = response?.error || chrome.runtime.lastError?.message || 'Gemini request failed.';
+          let errMsg = response?.error || chrome.runtime.lastError?.message || 'LLM request failed.';
           if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-            errMsg = 'Gemini API Rate Limit Reached (HTTP 429). Please wait a few seconds before clicking Ask Gemini again.';
+            errMsg = 'API Rate Limit Reached (HTTP 429). Please wait a few seconds before requesting LLM again.';
           }
           currentHoverState.feedback = errMsg;
           currentHoverState.feedbackType = 'error';
@@ -1015,12 +1205,39 @@
           return;
         }
 
-        boundedMapSet(sentenceAnalysisCache, state.sentenceKey, response.data, 200);
+        const resData = response.data;
+        if (resData && typeof resData === 'object' && !resData._responseLanguage) {
+          try {
+            Object.defineProperty(resData, '_responseLanguage', {
+              value: resolvedLang,
+              enumerable: false,
+              writable: true,
+              configurable: true
+            });
+          } catch (_) {
+            resData._responseLanguage = resolvedLang;
+          }
+        }
+
+        boundedMapSet(sentenceAnalysisCache, cacheLangKey, resData, 200);
+        if (resolvedLang === 'English') {
+          boundedMapSet(sentenceAnalysisCache, state.sentenceKey, resData, 200);
+        }
         const wordKey = normalizeText(state.word || '');
-        if (wordKey) boundedMapSet(sentenceAnalysisCache, `${wordKey}__${state.sentenceKey}`, response.data, 200);
-        autoSelectBestDefinitionFromGemini(state, response.data);
-        currentHoverState.feedback = 'Gemini analysis ready.';
-        currentHoverState.feedbackType = 'info';
+        if (wordKey) {
+          boundedMapSet(sentenceAnalysisCache, `${wordKey}__${cacheLangKey}`, resData, 200);
+          if (resolvedLang === 'English') {
+            boundedMapSet(sentenceAnalysisCache, `${wordKey}__${state.sentenceKey}`, resData, 200);
+          }
+        }
+
+        if (!state.cachedAnalysesByLang) state.cachedAnalysesByLang = {};
+        state.cachedAnalysesByLang[resolvedLang] = resData;
+        state.currentAnalysis = resData;
+        state.currentAnalysisLanguage = resolvedLang;
+
+        autoSelectBestDefinitionFromGemini(state, resData);
+        currentHoverState.feedback = '';
         rerenderCurrentTooltip();
         if (typeof onSuccess === 'function') onSuccess();
       }
@@ -1036,10 +1253,26 @@
         rerankDebounceTimer = null;
       }
 
-      if (state.geminiMatchedBase && state.geminiMatchedBase !== state.dictionaryMatch) {
-        const targetCand = state.geminiMatchedBase;
-        const matchingCand = (state.candidateList || []).find(c => c.text === targetCand || c.stem === targetCand);
-        if (matchingCand) {
+      if (state.geminiMatchedBase) {
+        const cleanHelper = (window.MunmekUI && window.MunmekUI.cleanKoreanLemma) ||
+                            (window.MunmekUI && window.MunmekUI.cleanKoreanWord) ||
+                            (w => String(w || '').trim());
+        const cleanTarget = cleanHelper(state.geminiMatchedBase);
+        const cleanCurrentMatch = cleanHelper(state.dictionaryMatch);
+
+        if (cleanTarget && cleanTarget !== cleanCurrentMatch) {
+          let matchingCand = (state.candidateList || []).find(c => {
+            const cText = c.text || '';
+            const cStem = c.stem || '';
+            return cText === cleanTarget || cStem === cleanTarget ||
+                   cleanHelper(cText) === cleanTarget || cleanHelper(cStem) === cleanTarget;
+          });
+
+          if (!matchingCand) {
+            matchingCand = { text: cleanTarget, score: 96, posHint: 'verb/noun', reason: 'LLM Matched Base' };
+            if (!Array.isArray(state.candidateList)) state.candidateList = [];
+            state.candidateList.unshift(matchingCand);
+          }
           switchCandidateForm(state, matchingCand.text);
         }
       }
@@ -1066,12 +1299,36 @@
           let sortedHits = sortHitsByBaseForm(res.hits);
           state.dictionaryEntries = sortedHits;
           state.dictionaryEntry = sortedHits[0];
-          state.lookupReason = `Gemini Matched (${res.hits[0].dictTitle || 'Local'})`;
+          state.lookupReason = `LLM Matched (${res.hits[0].dictTitle || 'Local'})`;
           const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey);
           if (cachedAnalysis && window.MunmekUI) {
             window.MunmekUI.autoSelectBestDefinitionFromGemini(state, cachedAnalysis);
           }
           rerenderCurrentTooltip();
+        } else if (state) {
+          chrome.runtime.sendMessage({
+            type: 'dictionaryLookup',
+            method: 'lookupBase',
+            text: selectedCandidate,
+            dictId: currentSelectedDictionaryId
+          }, (resBase) => {
+            if (resBase && resBase.hits && resBase.hits.length > 0 && state) {
+              let sortedHits = sortHitsByBaseForm(resBase.hits);
+              state.dictionaryEntries = sortedHits;
+              state.dictionaryEntry = sortedHits[0];
+              state.lookupReason = `LLM Matched (${resBase.hits[0].dictTitle || 'Local'})`;
+              const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey);
+              if (cachedAnalysis && window.MunmekUI) {
+                window.MunmekUI.autoSelectBestDefinitionFromGemini(state, cachedAnalysis);
+              }
+              rerenderCurrentTooltip();
+            } else if (state) {
+              state.dictionaryEntries = [];
+              state.dictionaryEntry = null;
+              state.lookupReason = 'No dictionary match found.';
+              rerenderCurrentTooltip();
+            }
+          });
         }
       });
     }
@@ -1089,6 +1346,8 @@
         type: 'createAnkiCard',
         data: {
           word: state.word,
+          surface: state.word,
+          base: state.dictionaryEntry?.base || state.dictionaryMatch || state.word,
           sentence: state.sentence,
           prevSentence: state.prevSentence,
           prevSentence2: state.prevSentence2,
@@ -1108,7 +1367,7 @@
         }
 
         currentHoverState.feedback = response.data?.updated ? 'Updated the last Anki card.' : 'Created a new Anki card.';
-        currentHoverState.feedbackType = 'info';
+        currentHoverState.feedbackType = 'success';
         rerenderCurrentTooltip();
       }
     );
@@ -1127,6 +1386,10 @@
   }
 
   function scheduleHideTooltip() {
+    if (autoAiDebounceTimer) {
+      clearTimeout(autoAiDebounceTimer);
+      autoAiDebounceTimer = null;
+    }
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       if (window.MunmekUI) window.MunmekUI.hideTooltip();
@@ -1142,25 +1405,356 @@
     return String(value || '').normalize().replace(/\s+/g, ' ').trim();
   }
 
-  // Active tab context extractor messaging
+  let lastKnownNetflixMeta = {
+    title: '',
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: '',
+    synopsis: '',
+    netflixId: ''
+  };
+
+  function parseNetflixTitleString(rawTitle) {
+    let cleanDoc = String(rawTitle || '')
+      .replace(/\s*[\|\-·]\s*(Netflix|넷플릭스).*$/i, '')
+      .replace(/^(Watch|시청하기)\s+/i, '')
+      .trim();
+
+    const isGeneric = !cleanDoc ||
+      /^netflix$/i.test(cleanDoc) ||
+      /^netflix video$/i.test(cleanDoc) ||
+      /^netflix\s*[:\-·]/i.test(cleanDoc) ||
+      /watch tv shows online/i.test(cleanDoc) ||
+      /watch movies online/i.test(cleanDoc);
+
+    if (isGeneric) {
+      return { showTitle: '', seasonNumber: null, episodeNumber: null };
+    }
+
+    let seasonNumber = null;
+    let episodeNumber = null;
+    let showTitle = cleanDoc;
+
+    const seMatch = cleanDoc.match(/(?:Season|시즌|S)\s*(\d+)[\s,:\-·]*(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+    if (seMatch) {
+      seasonNumber = parseInt(seMatch[1], 10);
+      episodeNumber = parseInt(seMatch[2] || seMatch[3], 10);
+      showTitle = cleanDoc.split(/[:\-·]\s*(?:Season|시즌|S\s*\d)/i)[0].trim();
+    } else {
+      const epOnlyMatch = cleanDoc.match(/(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+      if (epOnlyMatch) {
+        episodeNumber = parseInt(epOnlyMatch[1] || epOnlyMatch[2], 10);
+        showTitle = cleanDoc.split(/[:\-·]\s*(?:Episode|화|회|E\s*\d|Ep\s*\d)/i)[0].trim();
+      }
+    }
+
+    return { showTitle: showTitle || cleanDoc, seasonNumber, episodeNumber };
+  }
+
+  function extractNetflixPageData() {
+    try {
+      const url = window.location.href;
+      const matchWatch = url.match(/\/watch\/(\d+)/);
+      const matchTitle = url.match(/\/title\/(\d+)/);
+      const netflixId = matchWatch ? matchWatch[1] : (matchTitle ? matchTitle[1] : (lastKnownNetflixMeta.netflixId || ''));
+      if (netflixId) lastKnownNetflixMeta.netflixId = netflixId;
+
+      let title = '';
+      let epText = '';
+      let seasonNumber = null;
+      let episodeNumber = null;
+
+      // 1. Check MediaSession API
+      if (typeof navigator !== 'undefined' && navigator.mediaSession?.metadata) {
+        const meta = navigator.mediaSession.metadata;
+        const mArtist = (meta.artist || '').trim();
+        const mTitle = (meta.title || '').trim();
+        const mAlbum = (meta.album || '').trim();
+
+        console.log('[Munmek Netflix] MediaSession metadata found:', { artist: mArtist, title: mTitle, album: mAlbum });
+
+        if (mArtist && !/^netflix$|^netflix video$/i.test(mArtist)) {
+          title = mArtist;
+        }
+        if (mAlbum && !/^netflix$|^netflix video$/i.test(mAlbum)) {
+          epText = mAlbum;
+          const sMatch = mAlbum.match(/(?:Season|시즌|S)\s*(\d+)/i);
+          if (sMatch) seasonNumber = parseInt(sMatch[1], 10);
+        }
+        if (mTitle && !/^netflix$|^netflix video$/i.test(mTitle)) {
+          if (!title) {
+            title = mTitle;
+          } else {
+            epText = epText ? `${epText} - ${mTitle}` : mTitle;
+          }
+          const epMatch = mTitle.match(/(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회)/i);
+          if (epMatch) episodeNumber = parseInt(epMatch[1] || epMatch[2], 10);
+        }
+      }
+
+      // 2. Check Player DOM (when controls are visible or mounted in DOM)
+      const videoTitleContainer = document.querySelector('[data-uia="video-title"], .video-title, [data-uia="control-header"]');
+      if (videoTitleContainer) {
+        const hEl = videoTitleContainer.querySelector('h4, [data-uia="player-title-header"], .video-title-header, .ellipsize-text');
+        const spanEl = videoTitleContainer.querySelector('span, [data-uia="player-title-subtitle"], .video-title-sub');
+        const domShow = (hEl?.textContent || '').trim();
+        const domEp = (spanEl?.textContent || '').trim();
+        console.log('[Munmek Netflix] Player DOM video-title elements:', { domShow, domEp });
+        if (domShow && !/^netflix$|^netflix video$/i.test(domShow)) {
+          title = domShow;
+        }
+        if (domEp) {
+          epText = epText || domEp;
+        }
+      }
+
+      // Additional DOM fallbacks using unified selector
+      if (!title) {
+        const fallbackEl = document.querySelector('.video-title h4, [data-uia="control-header-title"], .watch-video--player-view-title, .previewModal--player_container_title, .watch-video--evidence-overlay-text, [data-uia="watch-video-title"]');
+        const text = (fallbackEl?.textContent || '').trim();
+        if (text && !/^netflix$|^netflix video$/i.test(text)) {
+          title = text;
+          console.log('[Munmek Netflix] Found title from fallback DOM selector:', title);
+        }
+      }
+
+      // Check button aria-labels (e.g. Back to Gokusen or Episodes: Gokusen)
+      if (!title) {
+        const episodesBtn = document.querySelector('[data-uia="control-episodes"], button[aria-label*="Episodes"], button[aria-label*="회차"]');
+        const ariaLabel = episodesBtn?.getAttribute('aria-label') || '';
+        const epAriaMatch = ariaLabel.match(/(?:Episodes|회차)\s*:\s*(.+)/i);
+        if (epAriaMatch && epAriaMatch[1].trim()) {
+          title = epAriaMatch[1].trim();
+          console.log('[Munmek Netflix] Found title from episodes button aria-label:', title);
+        }
+      }
+
+      // 3. Check document.title using unified title parser
+      if (document.title) {
+        const parsedDoc = parseNetflixTitleString(document.title);
+        if (!title && parsedDoc.showTitle) title = parsedDoc.showTitle;
+        if (seasonNumber == null && parsedDoc.seasonNumber != null) seasonNumber = parsedDoc.seasonNumber;
+        if (episodeNumber == null && parsedDoc.episodeNumber != null) episodeNumber = parsedDoc.episodeNumber;
+      }
+
+      // Parse seasonNumber and episodeNumber from epText if not yet populated
+      if (epText) {
+        const seMatch = epText.match(/(?:S|Season|시즌)\s*(\d+)[\s:]*(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+        if (seMatch) {
+          if (!seasonNumber) seasonNumber = parseInt(seMatch[1], 10);
+          if (!episodeNumber) episodeNumber = parseInt(seMatch[2] || seMatch[3], 10);
+        } else {
+          const epOnly = epText.match(/(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+          if (epOnly && !episodeNumber) {
+            episodeNumber = parseInt(epOnly[1] || epOnly[2], 10);
+          }
+        }
+      }
+
+      // 4. Scrape direct synopsis from Netflix DOM or JSON-LD
+      let directSynopsis = '';
+      const synopsisEl = document.querySelector('.previewModal--synopsis, .synopsis, [data-uia="episode-synopsis"], .titleDescription--synopsis, .episode-synopsis, [data-uia="video-synopsis"], .ltr-191i9y8, .about-synopsis');
+      if (synopsisEl && synopsisEl.textContent) {
+        directSynopsis = synopsisEl.textContent.trim();
+      }
+
+      if (!directSynopsis) {
+        const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+        for (const script of jsonLdScripts) {
+          try {
+            const parsed = JSON.parse(script.textContent || '{}');
+            if (parsed.description) {
+              directSynopsis = parsed.description.trim();
+              if (!title && parsed.name) title = parsed.name.trim();
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Fall back to persistent cache if current state is missing values
+      if (!title && lastKnownNetflixMeta.title) title = lastKnownNetflixMeta.title;
+      if (!seasonNumber && lastKnownNetflixMeta.seasonNumber) seasonNumber = lastKnownNetflixMeta.seasonNumber;
+      if (!episodeNumber && lastKnownNetflixMeta.episodeNumber) episodeNumber = lastKnownNetflixMeta.episodeNumber;
+      if (!epText && lastKnownNetflixMeta.episodeTitle) epText = lastKnownNetflixMeta.episodeTitle;
+      if (!directSynopsis && lastKnownNetflixMeta.synopsis) directSynopsis = lastKnownNetflixMeta.synopsis;
+
+      // Update persistent cache with any newly discovered values
+      if (title) lastKnownNetflixMeta.title = title;
+      if (seasonNumber) lastKnownNetflixMeta.seasonNumber = seasonNumber;
+      if (episodeNumber) lastKnownNetflixMeta.episodeNumber = episodeNumber;
+      if (epText) lastKnownNetflixMeta.episodeTitle = epText;
+      if (directSynopsis) lastKnownNetflixMeta.synopsis = directSynopsis;
+
+      const subText = subtitleHistoryBuffer.slice(-12).join(' ');
+
+      const result = {
+        siteType: 'netflix',
+        title: title || '',
+        netflixData: {
+          title: title || '',
+          netflixId,
+          seasonNumber,
+          episodeNumber,
+          episodeTitle: epText,
+          synopsis: directSynopsis,
+          hasDirectSynopsis: Boolean(directSynopsis),
+          subtitles: subText,
+          pageDetails: `${epText} ${directSynopsis}`.trim()
+        },
+        text: `${title} ${epText} ${directSynopsis} ${subText}`.trim()
+      };
+
+      console.log('[Munmek Netflix] Finished extractNetflixPageData:', {
+        url,
+        netflixId,
+        title: result.title,
+        seasonNumber,
+        episodeNumber,
+        hasDirectSynopsis: result.netflixData.hasDirectSynopsis,
+        subtitlesLength: subText.length
+      });
+
+      return result;
+    } catch (err) {
+      console.error('[Munmek Netflix] Error in extractNetflixPageData:', err);
+      return {
+        siteType: 'netflix',
+        title: lastKnownNetflixMeta.title || '',
+        netflixData: {
+          title: lastKnownNetflixMeta.title || '',
+          netflixId: lastKnownNetflixMeta.netflixId || '',
+          seasonNumber: lastKnownNetflixMeta.seasonNumber,
+          episodeNumber: lastKnownNetflixMeta.episodeNumber,
+          episodeTitle: lastKnownNetflixMeta.episodeTitle || '',
+          synopsis: lastKnownNetflixMeta.synopsis || '',
+          hasDirectSynopsis: Boolean(lastKnownNetflixMeta.synopsis),
+          subtitles: subtitleHistoryBuffer.slice(-12).join(' '),
+          pageDetails: ''
+        },
+        text: `${lastKnownNetflixMeta.title || ''} ${subtitleHistoryBuffer.slice(-12).join(' ')}`.trim()
+      };
+    }
+  }
+
+  function extractYouTubePageData() {
+    let videoId = '';
+    try {
+      const url = new URL(window.location.href);
+      videoId = url.searchParams.get('v') || (url.pathname.startsWith('/embed/') ? url.pathname.split('/')[2] : '');
+    } catch (e) {}
+
+    const titleEl = document.querySelector('h1.ytd-watch-metadata, #title h1, h1.title');
+    const title = (titleEl?.textContent || document.title || 'YouTube Video').replace(/\s*-\s*YouTube$/i, '').trim();
+
+    const authorEl = document.querySelector('#channel-name, #owner #text, ytd-channel-name');
+    const author = (authorEl?.textContent || '').trim();
+
+    const descEl = document.querySelector('#description-inline-expander, #description, ytd-text-inline-expander');
+    const description = (descEl?.textContent || '').trim();
+
+    // Check live on-screen YouTube captions if player is playing
+    const liveCaptions = [];
+    document.querySelectorAll('.ytp-caption-segment, .caption-visual-line, ytd-transcript-segment-renderer').forEach((el) => {
+      const t = (el.textContent || '').trim();
+      if (t && !liveCaptions.includes(t)) liveCaptions.push(t);
+    });
+
+    let captionTracks = [];
+    try {
+      if (window.ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
+        captionTracks = window.ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
+      } else {
+        const scripts = document.querySelectorAll('script');
+        for (const s of scripts) {
+          if (s.textContent && s.textContent.includes('captionTracks')) {
+            const match = s.textContent.match(/"captionTracks":\s*(\[[^\]]+\])/);
+            if (match) {
+              captionTracks = JSON.parse(match[1]);
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    const subText = [...subtitleHistoryBuffer, ...liveCaptions].slice(-15).join(' ');
+
+    return {
+      siteType: 'youtube',
+      title: title || 'YouTube Video',
+      youtubeData: {
+        videoId,
+        title,
+        author,
+        description,
+        captionTracks,
+        subtitlesSample: subText
+      },
+      text: `${title}\n${author}\n${subText || description}`.trim()
+    };
+  }
+
+  function extractGenericPageData() {
+    const parts = [];
+    const subtitleElements = document.querySelectorAll('.asbplayer-subtitle, [class*="subtitle"], [id*="subtitle"], track');
+    subtitleElements.forEach((el) => {
+      const t = (el.textContent || '').trim();
+      if (t && !parts.includes(t)) parts.push(t);
+    });
+
+    const contentArea = document.querySelector('#bodyContent, article, main, [role="main"]') || document.body;
+    const paragraphs = contentArea.querySelectorAll('p, h1, h2, h3');
+    paragraphs.forEach((p) => {
+      const t = (p.textContent || '').replace(/\s+/g, ' ').trim();
+      // Filter out boilerplate / short navigational text
+      if (t && t.length > 25 && t.length < 800 && !parts.includes(t)) {
+        parts.push(t);
+      }
+    });
+
+    return {
+      siteType: 'generic',
+      title: document.title || 'Webpage Content',
+      text: parts.slice(0, 8).join('\n\n').slice(0, 2500)
+    };
+  }
+
+  // Active tab context extractor and session messaging
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request.type === 'setTabSessionActive') {
+        extensionEnabled = Boolean(request.isActive);
+        if (!extensionEnabled) scheduleHideTooltip();
+        sendResponse({ success: true, extensionEnabled });
+        return true;
+      }
+
+      if (request.type === 'extractSiteContext') {
+        try {
+          const host = window.location.hostname.toLowerCase();
+          if (host.includes('netflix.com')) {
+            sendResponse(extractNetflixPageData());
+          } else if (host.includes('youtube.com') || host.includes('youtu.be')) {
+            sendResponse(extractYouTubePageData());
+          } else {
+            sendResponse(extractGenericPageData());
+          }
+        } catch (extractErr) {
+          console.error('[Munmek Content] extractSiteContext fatal error:', extractErr);
+          const isNet = window.location.hostname.toLowerCase().includes('netflix.com');
+          sendResponse({
+            siteType: isNet ? 'netflix' : 'generic',
+            title: isNet ? (lastKnownNetflixMeta.title || 'Netflix Video') : 'Webpage Content',
+            netflixData: isNet ? lastKnownNetflixMeta : null,
+            text: ''
+          });
+        }
+        return true;
+      }
+
       if (request.type === 'extractPageContext') {
-        const parts = [];
-        const subtitleElements = document.querySelectorAll('.asbplayer-subtitle, [class*="subtitle"], [id*="subtitle"], track');
-        subtitleElements.forEach((el) => {
-          const t = (el.textContent || '').trim();
-          if (t && !parts.includes(t)) parts.push(t);
-        });
-
-        const contentArea = document.querySelector('#bodyContent, article, main') || document.body;
-        const paragraphs = contentArea.querySelectorAll('p, h1, h2, h3');
-        paragraphs.forEach((p) => {
-          const t = (p.textContent || '').trim();
-          if (t && t.length > 15 && !parts.includes(t)) parts.push(t);
-        });
-
-        sendResponse({ text: parts.join('\n\n').slice(0, 20000), name: document.title || 'Webpage Content' });
+        sendResponse(extractGenericPageData());
         return true;
       }
     });

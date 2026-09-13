@@ -30,6 +30,16 @@
     { text: '로써는', type: 'particle', rule: 'particle-means-topic' },
 
     // Standard 2-syllable particles
+    { text: '이라는', type: 'particle', rule: 'particle-quotative-modifier-이라는' },
+    { text: '이라도', type: 'particle', rule: 'particle-even/at-least-이라도' },
+    { text: '치고는', type: 'particle', rule: 'particle-considering-topic' },
+    { text: '이라는게', type: 'particle', rule: 'particle-quotative-게' },
+    { text: '이라는것', type: 'particle', rule: 'particle-quotative-것' },
+    { text: '라는게', type: 'particle', rule: 'particle-quotative-게' },
+    { text: '라는것', type: 'particle', rule: 'particle-quotative-것' },
+    { text: '라는', type: 'particle', rule: 'particle-quotative-modifier-라는' },
+    { text: '라도', type: 'particle', rule: 'particle-even/at-least-라도' },
+    { text: '이란', type: 'particle', rule: 'particle-quotative-topic-이란' },
     { text: '에는', type: 'particle', rule: 'particle-in/at-topic' },
     { text: '에도', type: 'particle', rule: 'particle-in/at-also' },
     { text: '에의', type: 'particle', rule: 'particle-in/at-possessive' },
@@ -64,6 +74,7 @@
     { text: '치고', type: 'particle', rule: 'particle-considering' },
 
     // Single-syllable particles
+    { text: '란', type: 'particle', rule: 'particle-quotative-topic-란' },
     { text: '에', type: 'particle', rule: 'locative-dative-particle-e' },
     { text: '께', type: 'particle', rule: 'dative-hon-particle-kke' },
     { text: '게', type: 'particle', rule: 'dative-particle-ge' },
@@ -111,6 +122,16 @@
           continue;
         }
 
+        // Prevent stripping topic particle '는' on verb modifiers like ~하는, ~되는, ~있는, ~없는, ~않는, and intent modifiers ~려는
+        if (p.text === '는' && (
+          surface.endsWith('하는') || surface.endsWith('되는') || surface.endsWith('시키는') ||
+          surface.endsWith('있는') || surface.endsWith('없는') || surface.endsWith('않는') ||
+          surface.endsWith('려는') || surface.endsWith('으려는') || surface.endsWith('가려는') ||
+          surface.endsWith('오려는') || surface.endsWith('보려는') || surface.endsWith('살려는')
+        )) {
+          continue;
+        }
+
         results.push({
           stem,
           rule: p.rule,
@@ -152,10 +173,13 @@
     // 1. Regular Endings De-conjugation
     deconjugateRegularEndings(surface, addCandidate);
 
-    // 2. Vowel Contraction De-conjugation (-아/어요, -았/었어요, informal contractions)
+    // 2. Layered Morpheme De-stacking (Intent -(으)려는/-(으)려고, Conjecture/Future -겠-, Stacked Past+Modal)
+    deconjugateLayeredModalAndIntent(surface, addCandidate);
+
+    // 3. Vowel Contraction De-conjugation (-아/어요, -았/었어요, informal contractions)
     deconjugateVowelContractions(surface, addCandidate);
 
-    // 3. Irregular Conjugation Rules
+    // 4. Irregular Conjugation Rules
     deconjugateBaeupIrregular(surface, addCandidate);      // ㅂ 불규칙
     deconjugateDigeutIrregular(surface, addCandidate);     // ㄷ 불규칙
     deconjugateRieulDrop(surface, addCandidate);           // ㄹ 탈락
@@ -167,14 +191,147 @@
     return candidates.sort((a, b) => b.confidence - a.confidence);
   }
 
+  // Layered de-stacking for intent modifiers and pre-final modals (-겠-, -시-, -았/었-)
+  function deconjugateLayeredModalAndIntent(surface, addCandidate) {
+    if (!surface || surface.length < 2) return;
+
+    // A. Intent modifiers and purposives: -(으)려는, -(으)려고, -(으)려던, -(으)려
+    const intentMatch = surface.match(/^([가-힣]+?)(하려는|하려던|하려고|하려|으려는|으려던|으려고|으려|려는|려던|려고|려)$/);
+    if (intentMatch) {
+      const stem = intentMatch[1];
+      const ending = intentMatch[2];
+      if (ending.startsWith('하')) {
+        addCandidate(stem + '하다', `intent modifier ${ending} -> 하다`, 95, { grammar: ending });
+      } else {
+        addCandidate(stem + '다', `intent modifier ${ending} -> 다`, 90, { grammar: ending });
+      }
+    }
+
+    // B. Modal Conjecture / Speculation -겠- family (e.g. 맛있겠다, 가겠어요, 먹겠습니다, 했겠지, 알겠어, 좋겠군요)
+    const modalMatch = surface.match(/^([가-힣]+?)겠(다|어요|습니다|습니까|어|지|군|군요|구나|네|단|다면|으면|으니|을까|을까요|죠)?$/);
+    if (modalMatch) {
+      const preStem = modalMatch[1];
+      const outerEnding = modalMatch[2] || '';
+      const grammarMarker = '-겠' + (outerEnding ? outerEnding : '다');
+
+      // B1: preStem has past tense: 했, 었, 았, 였 (e.g. 했겠다 -> 하다, 먹었겠다 -> 먹다, 갔겠다 -> 가다)
+      if (preStem.endsWith('했')) {
+        addCandidate(preStem.slice(0, -1) + '하다', `past conjecture -했겠- -> 하다`, 92, { grammar: grammarMarker });
+      } else if (preStem.endsWith('었') || preStem.endsWith('았') || preStem.endsWith('였')) {
+        const pastStem = preStem.slice(0, -1);
+        addCandidate(pastStem + '다', `past conjecture -았/었겠- -> 다`, 90, { grammar: grammarMarker });
+        if (pastStem.length >= 1) {
+          const lastChar = pastStem[pastStem.length - 1];
+          if (Jamo.isHangulSyllable(lastChar)) {
+            const dec = Jamo.decomposeChar(lastChar);
+            const pfx = pastStem.slice(0, -1);
+            if (dec.vowel === 'ㅏ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅏ', '') + '다', 'past conjecture -> 다', 88, { grammar: grammarMarker });
+            if (dec.vowel === 'ㅓ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅓ', '') + '다', 'past conjecture -> 다', 88, { grammar: grammarMarker });
+            if (dec.vowel === 'ㅘ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅗ', '') + '다', 'past conjecture -> 오다/보다', 88, { grammar: grammarMarker });
+            if (dec.vowel === 'ㅝ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅜ', '') + '다', 'past conjecture -> 우다', 88, { grammar: grammarMarker });
+            if (dec.vowel === 'ㅕ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅣ', '') + '다', 'past conjecture -> 이다', 88, { grammar: grammarMarker });
+          }
+        }
+      } else if (preStem.endsWith('시') || preStem.endsWith('으시')) {
+        const honStem = preStem.endsWith('으시') ? preStem.slice(0, -2) : preStem.slice(0, -1);
+        addCandidate(honStem + '다', `honorific conjecture -시겠- -> 다`, 90, { grammar: grammarMarker });
+        addCandidate(preStem + '다', `honorific conjecture -> 시다`, 88, { grammar: grammarMarker });
+      } else if (preStem.endsWith('해야')) {
+        addCandidate(preStem.slice(0, -2) + '하다', `intent -해야겠- -> 하다`, 92, { grammar: grammarMarker });
+      } else if (preStem.endsWith('어야') || preStem.endsWith('아야') || preStem.endsWith('여야')) {
+        const root = preStem.slice(0, -2);
+        if (root.length >= 1) {
+          addCandidate(root + '다', `intent -어야/아야겠- -> 다`, 92, { grammar: grammarMarker });
+          const lastChar = root[root.length - 1];
+          if (Jamo.isHangulSyllable(lastChar)) {
+            const dec = Jamo.decomposeChar(lastChar);
+            const pfx = root.slice(0, -1);
+            if (dec.vowel === 'ㅘ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅗ', '') + '다', 'intent -> 오다/보다', 90, { grammar: grammarMarker });
+            if (dec.vowel === 'ㅝ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅜ', '') + '다', 'intent -> 우다/주다', 90, { grammar: grammarMarker });
+            if (dec.vowel === 'ㅕ') addCandidate(pfx + Jamo.composeChar(dec.initial, 'ㅣ', '') + '다', 'intent -> 이다', 90, { grammar: grammarMarker });
+          }
+        }
+      } else if (preStem.endsWith('야') && preStem.length >= 2) {
+        addCandidate(preStem.slice(0, -1) + '다', `intent -야겠- -> 다`, 92, { grammar: grammarMarker });
+      } else {
+        // Direct stem + 겠 (e.g. 맛있 + 겠 -> 맛있다, 먹 + 겠 -> 먹다, 가 + 겠 -> 가다, 알 + 겠 -> 알다)
+        addCandidate(preStem + '다', `conjecture -겠- -> 다`, 92, { grammar: grammarMarker });
+      }
+    }
+
+    // C. ㅎ-irregular past questions/endings (e.g. 그랬냐, 빨갰니, 어땠어, 이랬지, 저랬구나)
+    const hieutPastMatch = surface.match(/^([가-힣]*?)(랬|럤|갰|챘|댰|땠)(냐|니|어|어요|다|지요|죠|군|구나|는데)?$/);
+    if (hieutPastMatch) {
+      const prefix = hieutPastMatch[1];
+      const irregularChar = hieutPastMatch[2];
+      if (irregularChar === '랬') {
+        addCandidate(prefix + '렇다', 'ㅎ-irregular past (랬 -> 그렇다/이렇다/저렇다)', 92);
+      } else if (irregularChar === '땠') {
+        addCandidate(prefix + '떻다', 'ㅎ-irregular past (땠 -> 어떻다)', 92);
+      } else if (irregularChar === '갰') {
+        addCandidate(prefix + '갛다', 'ㅎ-irregular past (갰 -> 빨갛다)', 90);
+      }
+    }
+  }
+
   function deconjugateRegularEndings(surface, addCandidate) {
+    if (!surface || surface.length < 1) return;
+
+    // 1. Jamo-aware Batchim Suffix Matching (Vowel-stem verbs with fused final consonants)
+    const batchimEndings = [
+      // ㅂ-family
+      { batchim: 'ㅂ', tail: '니다', replacement: '다', confidence: 90, rule: 'formal polite -ㅂ니다' },
+      { batchim: 'ㅂ', tail: '니까', replacement: '다', confidence: 90, rule: 'formal polite question -ㅂ니까' },
+      { batchim: 'ㅂ', tail: '시다', replacement: '다', confidence: 88, rule: 'propositive -ㅂ시다' },
+
+      // ㄹ-family
+      { batchim: 'ㄹ', tail: '까요', replacement: '다', confidence: 88, rule: 'propositive question -ㄹ까요' },
+      { batchim: 'ㄹ', tail: '게요', replacement: '다', confidence: 88, rule: 'intention -ㄹ게요' },
+      { batchim: 'ㄹ', tail: '게', replacement: '다', confidence: 85, rule: 'intention -ㄹ게' },
+      { batchim: 'ㄹ', tail: '래요', replacement: '다', confidence: 88, rule: 'intention -ㄹ래요' },
+      { batchim: 'ㄹ', tail: '래', replacement: '다', confidence: 85, rule: 'intention -ㄹ래' },
+      { batchim: 'ㄹ', tail: '지도', replacement: '다', confidence: 85, rule: 'modal speculation -ㄹ지도' },
+      { batchim: 'ㄹ', tail: '수록', replacement: '다', confidence: 82, rule: 'conditional -ㄹ수록' },
+      { batchim: 'ㄹ', tail: '', replacement: '다', confidence: 70, rule: 'future modifier -ㄹ' },
+
+      // ㄴ-family
+      { batchim: 'ㄴ', tail: '가요', replacement: '다', confidence: 80, rule: 'interrogative -ㄴ가요' },
+      { batchim: 'ㄴ', tail: '가', replacement: '다', confidence: 75, rule: 'interrogative -ㄴ가' },
+      { batchim: 'ㄴ', tail: '지', replacement: '다', confidence: 75, rule: 'clause -ㄴ지' },
+      { batchim: 'ㄴ', tail: '데', replacement: '다', confidence: 80, rule: 'connective -ㄴ데' },
+      { batchim: 'ㄴ', tail: '다', replacement: '다', confidence: 85, rule: 'plain declarative -ㄴ다' },
+      { batchim: 'ㄴ', tail: '다는', replacement: '다', confidence: 85, rule: 'quotative modifier -ㄴ다는' },
+      { batchim: 'ㄴ', tail: '', replacement: '다', confidence: 75, rule: 'past/adj modifier -ㄴ' },
+
+      // ㅁ-family
+      { batchim: 'ㅁ', tail: '', replacement: '다', confidence: 75, rule: 'nominalizer -ㅁ' }
+    ];
+
+    for (const b of batchimEndings) {
+      const tail = b.tail || '';
+      // Avoid bare tail matching noun topic particles like -는, -은, -을, -를
+      if (b.tail === '' && (surface.endsWith('는') || surface.endsWith('은') || surface.endsWith('을') || surface.endsWith('ㄹ'))) {
+        continue;
+      }
+      if (surface.endsWith(tail) && surface.length > tail.length) {
+        const stemLength = surface.length - tail.length;
+        const lastChar = surface[stemLength - 1];
+        if (Jamo.isHangulSyllable(lastChar) && Jamo.getBatchim(lastChar) === b.batchim) {
+          const strippedChar = Jamo.setBatchim(lastChar, '');
+          const stem = surface.slice(0, stemLength - 1) + strippedChar;
+          if (stem.length >= 1) {
+            addCandidate(stem + b.replacement, b.rule, b.confidence);
+          }
+        }
+      }
+    }
+
+    // 2. Regular String Suffix Endings
     const endings = [
       // Formal polite
       { suffix: '습니다', replacement: '다', confidence: 90, rule: 'formal polite -습니다' },
       { suffix: '습니까', replacement: '다', confidence: 90, rule: 'formal polite question -습니까' },
       { suffix: '습니다만', replacement: '다', confidence: 90, rule: 'formal polite -습니다만' },
-      { suffix: 'ㅂ니다', replacement: '다', removeBatchim: true, confidence: 90, rule: 'formal polite -ㅂ니다' },
-      { suffix: 'ㅂ니까', replacement: '다', removeBatchim: true, confidence: 90, rule: 'formal polite question -ㅂ니까' },
 
       // Honorific + Past
       { suffix: '으셨습니다', replacement: '다', confidence: 88, rule: 'honorific past -으셨습니다' },
@@ -184,32 +341,41 @@
       { suffix: '으셨다', replacement: '다', confidence: 85, rule: 'honorific past -으셨다' },
       { suffix: '셨다', replacement: '다', confidence: 85, rule: 'honorific past -셨다' },
 
-      // Honorific present / mood
+      // Honorific present / mood / modifier
       { suffix: '으세요', replacement: '다', confidence: 85, rule: 'honorific polite -으세요' },
       { suffix: '세요', replacement: '다', confidence: 85, rule: 'honorific polite -세요' },
       { suffix: '으십니다', replacement: '다', confidence: 85, rule: 'honorific formal -으십니다' },
       { suffix: '십니다', replacement: '다', confidence: 85, rule: 'honorific formal -십니다' },
       { suffix: '으시군요', replacement: '다', confidence: 85, rule: 'honorific exclamation -으시군요' },
       { suffix: '시군요', replacement: '다', confidence: 85, rule: 'honorific exclamation -시군요' },
+      { suffix: '으시는', replacement: '다', confidence: 85, rule: 'honorific modifier -으시는' },
+      { suffix: '시는', replacement: '다', confidence: 85, rule: 'honorific modifier -시는' },
+      { suffix: '으시다', replacement: '다', confidence: 85, rule: 'honorific base -으시다' },
+      { suffix: '시다', replacement: '다', confidence: 82, rule: 'honorific base -시다' },
+      { suffix: '으시면', replacement: '다', confidence: 85, rule: 'honorific conditional -으시면' },
+      { suffix: '시면', replacement: '다', confidence: 85, rule: 'honorific conditional -시면' },
+      { suffix: '으시고', replacement: '다', confidence: 85, rule: 'honorific connective -으시고' },
+      { suffix: '시고', replacement: '다', confidence: 85, rule: 'honorific connective -시고' },
+      { suffix: '으시지만', replacement: '다', confidence: 85, rule: 'honorific contrast -으시지만' },
+      { suffix: '시지만', replacement: '다', confidence: 85, rule: 'honorific contrast -시지만' },
 
       // Propositive, intentional & suggestion endings
       { suffix: '을까요', replacement: '다', confidence: 88, rule: 'propositive question -을까요' },
-      { suffix: 'ㄹ까요', replacement: '다', removeBatchim: true, confidence: 88, rule: 'propositive question -ㄹ까요' },
-      { suffix: '까요', replacement: '다', removeBatchim: true, confidence: 82, rule: 'question -까요' },
+      { suffix: '까요', replacement: '다', confidence: 82, rule: 'question -까요' },
       { suffix: '을게요', replacement: '다', confidence: 88, rule: 'intention -을게요' },
-      { suffix: 'ㄹ게요', replacement: '다', removeBatchim: true, confidence: 88, rule: 'intention -ㄹ게요' },
       { suffix: '을게', replacement: '다', confidence: 85, rule: 'intention -을게' },
-      { suffix: 'ㄹ게', replacement: '다', removeBatchim: true, confidence: 85, rule: 'intention -ㄹ게' },
       { suffix: '을래요', replacement: '다', confidence: 88, rule: 'intention -을래요' },
-      { suffix: 'ㄹ래요', replacement: '다', removeBatchim: true, confidence: 88, rule: 'intention -ㄹ래요' },
       { suffix: '을래', replacement: '다', confidence: 85, rule: 'intention -을래' },
-      { suffix: 'ㄹ래', replacement: '다', removeBatchim: true, confidence: 85, rule: 'intention -ㄹ래' },
       { suffix: '읍시다', replacement: '다', confidence: 88, rule: 'propositive -읍시다' },
-      { suffix: 'ㅂ시다', replacement: '다', removeBatchim: true, confidence: 88, rule: 'propositive -ㅂ시다' },
       { suffix: '으러', replacement: '다', confidence: 80, rule: 'purpose -으러' },
       { suffix: '러', replacement: '다', confidence: 75, rule: 'purpose -러' },
       { suffix: '으려고요', replacement: '다', confidence: 85, rule: 'intent -으려고요' },
       { suffix: '려고요', replacement: '다', confidence: 85, rule: 'intent -려고요' },
+
+      // Plain Declarative
+      { suffix: '는다', replacement: '다', confidence: 85, rule: 'plain declarative -는다' },
+      { suffix: '다는', replacement: '다', confidence: 85, rule: 'declarative modifier -다는' },
+      { suffix: '는다는', replacement: '다', confidence: 85, rule: 'quotative modifier -는다는' },
 
       // Conversational endings & discovery/exclamation
       { suffix: '잖아요', replacement: '다', confidence: 85, rule: 'confirmation -잖아요' },
@@ -231,14 +397,11 @@
       { suffix: '니', replacement: '다', confidence: 70, rule: 'interrogative/connective -니' },
       { suffix: '나요', replacement: '다', confidence: 80, rule: 'interrogative -나요' },
       { suffix: '은가요', replacement: '다', confidence: 80, rule: 'interrogative -은가요' },
-      { suffix: 'ㄴ가요', replacement: '다', removeBatchim: true, confidence: 80, rule: 'interrogative -ㄴ가요' },
       { suffix: '은가', replacement: '다', confidence: 75, rule: 'interrogative -은가' },
-      { suffix: 'ㄴ가', replacement: '다', removeBatchim: true, confidence: 75, rule: 'interrogative -ㄴ가' },
       { suffix: '은지', replacement: '다', confidence: 75, rule: 'clause -은지' },
-      { suffix: 'ㄴ지', replacement: '다', removeBatchim: true, confidence: 75, rule: 'clause -ㄴ지' },
       { suffix: '는지', replacement: '다', confidence: 75, rule: 'clause -는지' },
 
-      // Past tense
+      // Past tense (Formal, Polite, Plain, and Informal)
       { suffix: '었습니다', replacement: '다', confidence: 88, rule: 'past formal -었습니다' },
       { suffix: '았습니다', replacement: '다', confidence: 88, rule: 'past formal -았습니다' },
       { suffix: '였습니다', replacement: '다', confidence: 88, rule: 'past formal -였습니다' },
@@ -251,6 +414,25 @@
       { suffix: '했다', replacement: '하다', replaceLast: true, confidence: 92, rule: 'past 하다 -> 했다' },
       { suffix: '했어요', replacement: '하다', replaceLast: true, confidence: 92, rule: 'past polite 하다 -> 했어요' },
       { suffix: '했습니다', replacement: '하다', replaceLast: true, confidence: 92, rule: 'past formal 하다 -> 했습니다' },
+      { suffix: '았어', replacement: '다', confidence: 85, rule: 'past informal -았어' },
+      { suffix: '었어', replacement: '다', confidence: 85, rule: 'past informal -었어' },
+      { suffix: '였어', replacement: '다', confidence: 85, rule: 'past informal -였어' },
+      { suffix: '했어', replacement: '하다', replaceLast: true, confidence: 92, rule: 'past informal 하다 -> 했어' },
+
+      // Modals
+      { suffix: '어야겠다', replacement: '다', confidence: 88, rule: 'modal intent -어야겠다' },
+      { suffix: '아야겠다', replacement: '다', confidence: 88, rule: 'modal intent -아야겠다' },
+      { suffix: '여야겠다', replacement: '다', confidence: 88, rule: 'modal intent -여야겠다' },
+      { suffix: '해야겠다', replacement: '하다', replaceLast: true, confidence: 92, rule: 'modal intent 하다 -> 해야겠다' },
+      { suffix: '을지도', replacement: '다', confidence: 85, rule: 'modal speculation -을지도' },
+
+      // Retrospective
+      { suffix: '더니', replacement: '다', confidence: 82, rule: 'connective -더니' },
+      { suffix: '던', replacement: '다', confidence: 80, rule: 'retrospective modifier -던' },
+      { suffix: '았던', replacement: '다', confidence: 85, rule: 'past retrospective -았던' },
+      { suffix: '었던', replacement: '다', confidence: 85, rule: 'past retrospective -었던' },
+      { suffix: '였던', replacement: '다', confidence: 85, rule: 'past retrospective -였던' },
+      { suffix: '했던', replacement: '하다', replaceLast: true, confidence: 92, rule: 'past retrospective 하다 -> 했던' },
 
       // Polite / Casual
       { suffix: '어요', replacement: '다', confidence: 80, rule: 'polite ending -어요' },
@@ -263,36 +445,82 @@
       { suffix: '지요', replacement: '다', confidence: 80, rule: 'polite ending -지요' },
       { suffix: '죠', replacement: '다', confidence: 80, rule: 'polite ending -죠' },
       { suffix: '네요', replacement: '다', confidence: 80, rule: 'polite ending -네요' },
+      { suffix: '네', replacement: '다', confidence: 80, rule: 'exclamatory -네' },
+      { suffix: '서', replacement: '다', confidence: 78, rule: 'contracted connective -서' },
       { suffix: '군요', replacement: '다', confidence: 80, rule: 'polite ending -군요' },
 
       // Connectives & Clausal
-      { suffix: '고서', replacement: '다', confidence: 78, rule: 'sequential connective -고서' },
-      { suffix: '고', replacement: '다', confidence: 80, rule: 'connective -고' },
-      { suffix: '거나', replacement: '다', confidence: 75, rule: 'disjunctive -거나' },
-      { suffix: '자', replacement: '다', confidence: 70, rule: 'temporal -자' },
-      { suffix: '게', replacement: '다', confidence: 70, rule: 'adverbial -게' },
-      { suffix: '지', replacement: '다', confidence: 70, rule: 'negation/suspective -지' },
-      { suffix: '는데', replacement: '다', confidence: 75, rule: 'connective -는데' },
-      { suffix: '은데', replacement: '다', confidence: 75, rule: 'connective -은데' },
-      { suffix: 'ㄴ데', replacement: '다', removeBatchim: true, confidence: 75, rule: 'connective -ㄴ데' },
-      { suffix: '어서', replacement: '다', confidence: 75, rule: 'cause connective -어서' },
-      { suffix: '아서', replacement: '다', confidence: 75, rule: 'cause connective -아서' },
-      { suffix: '여서', replacement: '다', confidence: 75, rule: 'cause connective -여서' },
-      { suffix: '해서', replacement: '하다', replaceLast: true, confidence: 85, rule: 'cause 하다 -> 해서' },
-      { suffix: '으면', replacement: '다', confidence: 75, rule: 'conditional -으면' },
-      { suffix: '면', replacement: '다', confidence: 70, rule: 'conditional -면' },
-      { suffix: '지만', replacement: '다', confidence: 75, rule: 'contrast -지만' },
-      { suffix: '자마자', replacement: '다', confidence: 75, rule: 'temporal -자마자' },
-      { suffix: '도록', replacement: '다', confidence: 75, rule: 'purpose -도록' },
-      { suffix: '려고', replacement: '다', confidence: 75, rule: 'intent -려고' },
-      { suffix: '으려고', replacement: '다', confidence: 75, rule: 'intent -으려고' },
+      { suffix: '고서', replacement: '다', confidence: 85, rule: 'sequential connective -고서' },
+      { suffix: '고', replacement: '다', confidence: 85, rule: 'connective -고' },
+      { suffix: '거나', replacement: '다', confidence: 82, rule: 'disjunctive -거나' },
+      { suffix: '자', replacement: '다', confidence: 80, rule: 'temporal -자' },
+      { suffix: '게', replacement: '다', confidence: 82, rule: 'adverbial -게' },
+      { suffix: '지', replacement: '다', confidence: 85, rule: 'negation/suspective -지' },
+      { suffix: '는데', replacement: '다', confidence: 82, rule: 'connective -는데' },
+      { suffix: '은데', replacement: '다', confidence: 80, rule: 'connective -은데' },
+      { suffix: '어서', replacement: '다', confidence: 82, rule: 'cause connective -어서' },
+      { suffix: '아서', replacement: '다', confidence: 82, rule: 'cause connective -아서' },
+      { suffix: '여서', replacement: '다', confidence: 82, rule: 'cause connective -여서' },
+      { suffix: '해서', replacement: '하다', replaceLast: true, confidence: 88, rule: 'cause 하다 -> 해서' },
+      { suffix: '으면', replacement: '다', confidence: 82, rule: 'conditional -으면' },
+      { suffix: '면', replacement: '다', confidence: 80, rule: 'conditional -면' },
+      { suffix: '으면서', replacement: '다', confidence: 82, rule: 'connective -으면서' },
+      { suffix: '면서', replacement: '다', confidence: 82, rule: 'connective -면서' },
+      { suffix: '으며', replacement: '다', confidence: 80, rule: 'connective -으며' },
+      { suffix: '며', replacement: '다', confidence: 80, rule: 'connective -며' },
+      { suffix: '으므로', replacement: '다', confidence: 82, rule: 'connective -으므로' },
+      { suffix: '므로', replacement: '다', confidence: 82, rule: 'connective -므로' },
+      { suffix: '느라고', replacement: '다', confidence: 82, rule: 'connective -느라고' },
+      { suffix: '으려면', replacement: '다', confidence: 85, rule: 'intent connective -으려면' },
+      { suffix: '려면', replacement: '다', confidence: 85, rule: 'intent connective -려면' },
+      { suffix: '아야', replacement: '다', confidence: 82, rule: 'conditional -아야' },
+      { suffix: '어야', replacement: '다', confidence: 82, rule: 'conditional -어야' },
+      { suffix: '여야', replacement: '다', confidence: 82, rule: 'conditional -여야' },
+      { suffix: '해야', replacement: '하다', replaceLast: true, confidence: 90, rule: 'conditional 하다 -> 해야' },
+      { suffix: '을수록', replacement: '다', confidence: 82, rule: 'conditional -을수록' },
+      { suffix: '더라도', replacement: '다', confidence: 82, rule: 'concession -더라도' },
+      { suffix: '으나', replacement: '다', confidence: 80, rule: 'contrastive -으나' },
+      { suffix: '고자', replacement: '다', confidence: 82, rule: 'intent -고자' },
+      { suffix: '길래', replacement: '다', confidence: 82, rule: 'cause -길래' },
+      { suffix: '지만', replacement: '다', confidence: 85, rule: 'contrast -지만' },
+      { suffix: '자마자', replacement: '다', confidence: 85, rule: 'temporal -자마자' },
+      { suffix: '도록', replacement: '다', confidence: 82, rule: 'purpose -도록' },
+      { suffix: '려고', replacement: '다', confidence: 85, rule: 'intent -려고' },
+      { suffix: '으려고', replacement: '다', confidence: 85, rule: 'intent -으려고' },
+
+      // Quotatives
+      { suffix: '대요', replacement: '다', confidence: 85, rule: 'hearsay -대요' },
+      { suffix: '대', replacement: '다', confidence: 80, rule: 'hearsay -대' },
+      { suffix: '단다', replacement: '다', confidence: 85, rule: 'declarative -단다' },
+      { suffix: '냐', replacement: '다', confidence: 80, rule: 'interrogative -냐' },
+      { suffix: '니', replacement: '다', confidence: 80, rule: 'interrogative -니' },
+      { suffix: '다고요', replacement: '다', confidence: 85, rule: 'quotative -다고요' },
+      { suffix: '다고', replacement: '다', confidence: 85, rule: 'quotative -다고' },
+      { suffix: '냐고', replacement: '다', confidence: 82, rule: 'quotative question -냐고' },
+      { suffix: '느냐고', replacement: '다', confidence: 82, rule: 'quotative question -느냐고' },
+      { suffix: '자고', replacement: '다', confidence: 82, rule: 'quotative propositive -자고' },
+      { suffix: '으라고', replacement: '다', confidence: 82, rule: 'quotative imperative -으라고' },
+      { suffix: '라고', replacement: '다', confidence: 80, rule: 'quotative imperative -라고' },
+
+      // Nominalizers
+      { suffix: '기', replacement: '다', confidence: 75, rule: 'nominalizer -기' },
+      { suffix: '음', replacement: '다', confidence: 75, rule: 'nominalizer -음' },
+
+      // 하다 / 되다 / 시키다 verb modifier endings
+      { suffix: '하는', replacement: '하다', replaceLast: true, confidence: 95, rule: 'present modifier 하다 -> 하는' },
+      { suffix: '한', replacement: '하다', replaceLast: true, confidence: 95, rule: 'past modifier 하다 -> 한' },
+      { suffix: '할', replacement: '하다', replaceLast: true, confidence: 95, rule: 'future modifier 하다 -> 할' },
+      { suffix: '되는', replacement: '되다', replaceLast: true, confidence: 95, rule: 'present modifier 되다 -> 되는' },
+      { suffix: '된', replacement: '되다', replaceLast: true, confidence: 95, rule: 'past modifier 되다 -> 된' },
+      { suffix: '될', replacement: '되다', replaceLast: true, confidence: 95, rule: 'future modifier 되다 -> 될' },
+      { suffix: '시키는', replacement: '시키다', replaceLast: true, confidence: 95, rule: 'present modifier 시키다 -> 시키는' },
+      { suffix: '시킨', replacement: '시키다', replaceLast: true, confidence: 95, rule: 'past modifier 시키다 -> 시킨' },
+      { suffix: '시킬', replacement: '시키다', replaceLast: true, confidence: 95, rule: 'future modifier 시키다 -> 시킬' },
 
       // Adnominal Modifiers
       { suffix: '는', replacement: '다', confidence: 70, rule: 'present modifier -는' },
       { suffix: '은', replacement: '다', confidence: 70, rule: 'past modifier -은' },
-      { suffix: 'ㄴ', replacement: '다', removeBatchim: true, confidence: 70, rule: 'past modifier -ㄴ' },
-      { suffix: '을', replacement: '다', confidence: 70, rule: 'future modifier -을' },
-      { suffix: 'ㄹ', replacement: '다', removeBatchim: true, confidence: 70, rule: 'future modifier -ㄹ' }
+      { suffix: '을', replacement: '다', confidence: 70, rule: 'future modifier -을' }
     ];
 
     for (const e of endings) {
@@ -303,17 +531,10 @@
           continue;
         }
 
-        let stem = surface.slice(0, -e.suffix.length);
-
-        if (e.removeBatchim && stem.length > 0) {
-          const lastChar = stem[stem.length - 1];
-          const batchim = Jamo.getBatchim(lastChar);
-          if (batchim === 'ㄴ' || batchim === 'ㅂ' || batchim === 'ㄹ') {
-            stem = stem.slice(0, -1) + Jamo.setBatchim(lastChar, '');
-          }
+        const stem = surface.slice(0, -e.suffix.length);
+        if (stem.length >= 1) {
+          addCandidate(stem + e.replacement, e.rule, e.confidence);
         }
-
-        addCandidate(stem + e.replacement, e.rule, e.confidence);
       }
     }
   }
@@ -351,6 +572,10 @@
       const lastChar = stem[stem.length - 1];
       if (!Jamo.isHangulSyllable(lastChar)) continue;
 
+      // Structural guard: do not treat known single-syllable grammar endings as vowel-contracted stems
+      const GRAMMAR_ENDING_BLOCK = new Set(['네', '서', '게', '지', '고', '며', '면', '자', '니', '든', '려', '나']);
+      if (!isPolite && GRAMMAR_ENDING_BLOCK.has(lastChar)) continue;
+
       const decomp = Jamo.decomposeChar(lastChar);
       const { initial, vowel, final } = decomp;
       const prefix = stem.slice(0, -1);
@@ -371,11 +596,25 @@
         }
         // -ㅏ stem (가요 -> 가다, 들어가요 -> 들어가다, 나가요 -> 나가다, 만나요 -> 만나다, 자요 -> 자다, 사요 -> 사다)
         else if (vowel === 'ㅏ') {
+          if (lastChar === '가' && prefix.length >= 1) {
+            const prevChar = prefix[prefix.length - 1];
+            if (Jamo.isHangulSyllable(prevChar)) {
+              const prevVowel = Jamo.decomposeChar(prevChar).vowel;
+              if (prevVowel !== 'ㅓ' && prevVowel !== 'ㅏ' && prevVowel !== 'ㅕ') {
+                continue;
+              }
+            }
+          }
           addCandidate(prefix + lastChar + '다', 'vowel contraction (-ㅏ -> -ㅏ다)', conf);
         }
         // -ㅓ stem (서요 -> 서다, 건너요 -> 건너다, 켜요 -> 켜다)
         else if (vowel === 'ㅓ') {
-          addCandidate(prefix + lastChar + '다', 'vowel contraction (-ㅓ -> -ㅓ다)', conf);
+          // Safeguard: Do not deconjugate nouns ending in location/instrumental particles (-에서, -으로서, -로써, -에게서, -한테서)
+          const isParticleEnding = surface.endsWith('에서') || surface.endsWith('로서') || surface.endsWith('로써') ||
+                                   surface.endsWith('으로서') || surface.endsWith('으로써') || surface.endsWith('에게서') || surface.endsWith('한테서');
+          if (!isParticleEnding) {
+            addCandidate(prefix + lastChar + '다', 'vowel contraction (-ㅓ -> -ㅓ다)', conf);
+          }
         }
         // -ㅕ stem (ㅣ-contraction: 기다려요 -> 기다리다, 마셔요 -> 마시다, 가르쳐요 -> 가르치다, 던져요 -> 던지다, 다녀요 -> 다니다, 달려요 -> 달리다, 보여요 -> 보이다, 헤어져요 -> 헤어지다)
         else if (vowel === 'ㅕ') {
@@ -393,8 +632,10 @@
         }
         // -ㅝ stem (ㅜ-contraction: 배워요 -> 배우다, 줘요 -> 주다, 바꿔요 -> 바꾸다, 키워요 -> 키우다, 세워요 -> 세우다, 도와줘요 -> 도와주다)
         else if (vowel === 'ㅝ') {
+          // If word matches ㅂ-irregular pattern (e.g. 부끄러워 -> 부끄럽다, 고마워 -> 고맙다), avoid spurious *우다 candidates
+          const isBIrregular = /([가-힣]+)워([요서가-힣]*)$/.test(surface) && prefix.length >= 1;
           const uChar = Jamo.composeChar(initial, 'ㅜ', '');
-          if (uChar) {
+          if (uChar && !isBIrregular) {
             addCandidate(prefix + uChar + '다', 'ㅜ-contraction (-ㅝ -> -우다/-주다)', conf);
           }
         }
@@ -426,9 +667,17 @@
         } else if (vowel === 'ㅏ' && !isReuPattern) {
           const cleanChar = Jamo.composeChar(initial, 'ㅏ', '');
           if (cleanChar) addCandidate(prefix + cleanChar + '다', 'past contraction (-았- -> -다)', conf);
+          if (initial === 'ㅃ' || initial === 'ㅍ') {
+            const euChar = Jamo.composeChar(initial, 'ㅡ', '');
+            if (euChar) addCandidate(prefix + euChar + '다', 'past ㅡ-irregular -> -쁘다/-프다', 90);
+          }
         } else if (vowel === 'ㅓ' && !isReuPattern) {
           const cleanChar = Jamo.composeChar(initial, 'ㅓ', '');
           if (cleanChar) addCandidate(prefix + cleanChar + '다', 'past contraction (-었- -> -다)', conf);
+          if (initial === 'ㅃ' || initial === 'ㅍ') {
+            const euChar = Jamo.composeChar(initial, 'ㅡ', '');
+            if (euChar) addCandidate(prefix + euChar + '다', 'past ㅡ-irregular -> -쁘다/-프다', 90);
+          }
         } else if (vowel === 'ㅐ') {
           const cleanChar = Jamo.composeChar(initial, 'ㅐ', '');
           if (cleanChar) addCandidate(prefix + cleanChar + '다', 'past contraction (-했/-냈 -> -다)', conf);
@@ -489,7 +738,7 @@
     if (surface === '도와' || surface.startsWith('도왔') || surface.startsWith('도와서')) {
       addCandidate('돕다', 'ㅂ-irregular (도와 -> 돕다)', 90);
     }
-    if (surface === '곱아' || surface.startsWith('고왔') || surface.startsWith('고와서')) {
+    if (surface === '고와' || surface.startsWith('고왔') || surface.startsWith('고와서')) {
       addCandidate('곱다', 'ㅂ-irregular (고와 -> 곱다)', 90);
     }
   }
@@ -518,10 +767,11 @@
 
   // ㄹ 탈락 (e.g., 사네요 -> 살다, 아는 -> 알다, 만드세요 -> 만들다)
   function deconjugateRieulDrop(surface, addCandidate) {
-    const endings = ['네요', '네요', '세요', '십니다', '습니다', 'ㄴ다', '는', 'ㄴ'];
+    const endings = ['네요', '세요', '십니다', '습니다', 'ㄴ다', '는', 'ㄴ'];
     for (const end of endings) {
       if (surface.endsWith(end) && surface.length > end.length) {
         const stem = surface.slice(0, -end.length);
+        if (stem.endsWith('하') || stem.endsWith('되') || stem.endsWith('시키')) continue;
         const lastChar = stem[stem.length - 1];
         if (Jamo.isHangulSyllable(lastChar) && !Jamo.hasBatchim(lastChar)) {
           const rieulStem = stem.slice(0, -1) + Jamo.setBatchim(lastChar, 'ㄹ');
@@ -584,12 +834,12 @@
       addCandidate(prefix + '고프다', 'ㅡ-drop (-고파 -> -고프다)', 92);
     }
 
-    const euMatch = surface.match(/([가-힣]*)([파뻐퍼프])([요서도면지라았었ㄴㄹ]*)$/);
+    const euMatch = surface.match(/([가-힣]*)([파뻐퍼프빠])([요서도면지라았었ㄴㄹ]*)$/);
     if (euMatch) {
       const prefix = euMatch[1] || '';
       const v = euMatch[2];
       if (v === '파' || v === '퍼') addCandidate(prefix + '프다', 'ㅡ-drop (-파/-퍼 -> -프다)', 88);
-      if (v === '뻐') addCandidate(prefix + '쁘다', 'ㅡ-drop (-뻐 -> -쁘다)', 88);
+      if (v === '뻐' || v === '빠') addCandidate(prefix + '쁘다', 'ㅡ-drop (-뻐/-빠 -> -쁘다)', 88);
     }
   }
 

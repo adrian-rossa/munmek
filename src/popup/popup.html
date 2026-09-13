@@ -2,49 +2,90 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Munmek Context & Settings</title>
+  <title>Munmek Context & Session</title>
   <link rel="icon" type="image/png" href="../../assets/icon32.png">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="panel">
-    <div class="header" style="display: flex; align-items: center; gap: 10px;">
-      <img src="../../assets/icon32.png" alt="Munmek Icon" style="width: 28px; height: 28px; object-fit: contain;">
-      <h1 style="margin: 0; flex: 1; font-size: 1.15rem;">Munmek Context</h1>
-      <button id="open-settings" class="secondary" style="padding: 4px 10px; font-size: 0.78rem;">⚙ Settings</button>
-    </div>
-
-    <div class="toggle-card">
-      <div class="toggle-info">
-        <div class="toggle-title">Extension Hover & Popup</div>
-        <div class="toggle-subtitle" id="toggleStateLabel">Enabled</div>
+    <div class="header">
+      <div class="header-brand">
+        <img src="../../assets/icon32.png" alt="Munmek Icon" class="logo-icon">
+        <h1>Munmek</h1>
       </div>
-      <label class="switch">
-        <input type="checkbox" id="extensionToggleCheck" checked>
-        <span class="slider round"></span>
-      </label>
+      <button id="open-settings" class="icon-btn" title="Open Settings">⚙ Settings</button>
     </div>
 
-    <div class="section-title">Active Tab Context</div>
-    <div id="contextStatus" class="status-card">Checking active tab context...</div>
+    <!-- State 1: Inactive Session Card -->
+    <div id="inactiveCard" class="card inactive-card">
+      <div class="badge inactive-badge">Extension Inactive on this tab</div>
+      <p class="session-desc">Korean hover lookup and video context are inactive for this tab by default.</p>
+      <div class="start-btn-group">
+        <button id="startSessionBtn" class="primary-btn">
+          ▶ Start with Context
+        </button>
+        <button id="startSessionNoContextBtn" class="secondary-btn start-no-context-btn">
+          ⚡ Start (No Context)
+        </button>
+      </div>
+    </div>
 
-    <div class="btn-group">
-      <button id="extractPageBtn">
-        📄 Extract Page / Subtitles Context
-      </button>
+    <!-- State 2: Loading State -->
+    <div id="loadingCard" class="card loading-card" style="display: none;">
+      <div class="spinner"></div>
+      <div id="loadingTitle" class="loading-title">Starting Munmek Session...</div>
+      <div id="loadingStatus" class="loading-desc">Extracting context & analyzing scene...</div>
+    </div>
 
-      <input type="file" id="contextFileInput" accept=".txt,.srt">
-      <button id="uploadFileBtn" class="secondary">
-        📁 Upload Context File (.txt, .srt)
-      </button>
+    <!-- State 3: Active Session Card -->
+    <div id="activeCard" class="card active-card" style="display: none;">
+      <div class="active-header">
+        <div class="active-title-group">
+          <span class="pulse-dot"></span>
+          <span class="active-label">Munmek Active</span>
+        </div>
+        <button id="stopSessionBtn" class="stop-btn" title="End Session for this tab">⏹ Stop</button>
+      </div>
 
-      <button id="clearContextBtn" class="danger" style="display:none;">
-        🗑 Clear Tab Context
-      </button>
+      <div class="context-box">
+        <div class="context-header">
+          <span id="siteBadge" class="site-badge generic-badge">📄 Webpage</span>
+          <span id="contextLength" class="context-length">0 chars</span>
+        </div>
+        <div id="contextMediaTitle" class="media-title">No context loaded yet</div>
+        <div id="contextSummaryPreview" class="summary-preview">Click 'Refresh Context' to extract video or page synopses.</div>
+      </div>
+
+      <!-- Netflix TMDB missing key warning callout -->
+      <div id="netflixKeyWarning" class="warning-callout" style="display: none;">
+        <div class="warning-text">
+          💡 <strong>Tip:</strong> TMDB API Key not configured. Add a free TMDB Key in Settings to auto-fetch Netflix show & episode synopses.
+        </div>
+        <button id="openSettingsWarningBtn" class="small-link-btn">Open Settings</button>
+      </div>
+
+      <div class="btn-group">
+        <button id="refreshContextBtn" class="secondary-btn">
+          🔄 Refresh Context
+        </button>
+
+        <details class="more-options">
+          <summary>Manual Context File / Clear</summary>
+          <div class="manual-tools">
+            <input type="file" id="contextFileInput" accept=".txt,.srt">
+            <button id="uploadFileBtn" class="subtle-btn">
+              📁 Upload Context File (.txt, .srt)
+            </button>
+            <button id="clearContextBtn" class="danger-btn">
+              🗑 Clear Context
+            </button>
+          </div>
+        </details>
+      </div>
     </div>
 
     <div class="hint">
-      Optionally, you can provide every LLM request with further context here (e.g. summary of the webpage/subtitle file).
+      Active sessions enable hover popups and ground LLM lookups with scene context on this tab.
     </div>
   </div>
   <script src="popup.js"></script>

@@ -132,4 +132,107 @@ describe('Korean Pipeline Compound & Subword Decomposition', () => {
     expect(texts).toContain('얼음');
     expect(texts).toContain('컵');
   });
+
+  it('correctly deconjugates -하는/-되는 verbs to -하다/-되다 and root noun without spurious ㄹ-drop (e.g. 지지하는 -> 지지하다, 지지)', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('지지하는');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('지지하다');
+    expect(texts).toContain('지지');
+    expect(texts).not.toContain('지지할다');
+    expect(texts).not.toContain('지지하');
+    expect(texts).not.toContain('지');
+  });
+
+  it('correctly deconjugates 공부하는 and 시작되는', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidatesGongbu = KoreanPipeline.analyzeKoreanWord('공부하는');
+    const textsGongbu = candidatesGongbu.map(c => c.text);
+    expect(textsGongbu).toContain('공부하다');
+    expect(textsGongbu).toContain('공부');
+    expect(textsGongbu).not.toContain('공부할다');
+
+    const candidatesSijak = KoreanPipeline.analyzeKoreanWord('시작되는');
+    const textsSijak = candidatesSijak.map(c => c.text);
+    expect(textsSijak).toContain('시작되다');
+    expect(textsSijak).toContain('시작');
+    expect(textsSijak).not.toContain('시작될다');
+  });
+
+  it('deconjugates adjective conjecture 맛있겠다 -> 맛있다 and emits -겠다 grammar ending', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('맛있겠다');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('맛있다');
+    expect(texts.some(t => t.includes('겠다'))).toBe(true);
+  });
+
+  it('deconjugates verb conjecture 먹겠다 -> 먹다 and polite 가겠어요 -> 가다', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    expect(KoreanPipeline.analyzeKoreanWord('먹겠다').map(c => c.text)).toContain('먹다');
+    expect(KoreanPipeline.analyzeKoreanWord('가겠어요').map(c => c.text)).toContain('가다');
+    expect(KoreanPipeline.analyzeKoreanWord('하겠습니다').map(c => c.text)).toContain('하다');
+    expect(KoreanPipeline.analyzeKoreanWord('했겠다').map(c => c.text)).toContain('하다');
+    expect(KoreanPipeline.analyzeKoreanWord('좋겠다').map(c => c.text)).toContain('좋다');
+    expect(KoreanPipeline.analyzeKoreanWord('알겠어').map(c => c.text)).toContain('알다');
+  });
+
+  it('strips particle 에서 from 세상에서 and emits BOTH 세상 and 에서 as candidates', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('세상에서');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('세상');
+    expect(texts).toContain('에서');
+    expect(texts).not.toContain('세상에서다');
+  });
+
+  it('strips quotative particle 이란 from 탓이란 and emits 탓 and 이란/란', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('탓이란');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('탓');
+    expect(texts.some(t => t === '이란' || t === '란')).toBe(true);
+  });
+
+  it('deconjugates intent modifier 하려는 -> 하다 and 돌아가려는 -> 돌아가다', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const c1 = KoreanPipeline.analyzeKoreanWord('하려는');
+    expect(c1.map(c => c.text)).toContain('하다');
+    expect(c1.map(c => c.text)).toContain('려는');
+
+    const c2 = KoreanPipeline.analyzeKoreanWord('돌아가려는');
+    expect(c2.map(c => c.text)).toContain('돌아가다');
+  });
+
+  it('deconjugates ㅂ-irregular 부끄러워 -> 부끄럽다 without generating spurious 부끄러우다', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('부끄러워');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('부끄럽다');
+    expect(texts).not.toContain('부끄러우다');
+  });
+
+  it('deconjugates compound verb 빠져나가지 -> 빠져나가다 with high confidence', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('빠져나가지');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('빠져나가다');
+  });
+
+  it('deconjugates past question ㅎ-irregular 그랬냐 -> 그렇다', async () => {
+    const pipeline = await import('../src/nlp/korean_pipeline.js');
+    const KoreanPipeline = pipeline.default || globalThis.KoreanPipeline;
+    const candidates = KoreanPipeline.analyzeKoreanWord('그랬냐');
+    const texts = candidates.map(c => c.text);
+    expect(texts).toContain('그렇다');
+  });
 });

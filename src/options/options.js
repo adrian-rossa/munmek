@@ -1,6 +1,24 @@
 document.addEventListener('DOMContentLoaded', () => {
+  const aiProviderSelect = document.getElementById('aiProvider');
+  const geminiSettingsContainer = document.getElementById('geminiSettingsContainer');
+  const customAiSettingsContainer = document.getElementById('customAiSettingsContainer');
   const apiKeyInput = document.getElementById('apiKey');
   const modelIdInput = document.getElementById('modelId');
+  const geminiModelSelect = document.getElementById('geminiModelSelect');
+  const customEndpointUrlInput = document.getElementById('customEndpointUrl');
+  const customModelIdInput = document.getElementById('customModelId');
+  const customModelSelect = document.getElementById('customModelSelect');
+  const customApiKeyInput = document.getElementById('customApiKey');
+  const customDisableReasoningInput = document.getElementById('customDisableReasoning');
+  const customTemperatureInput = document.getElementById('customTemperature');
+  const customTopPInput = document.getElementById('customTopP');
+  const customTopKInput = document.getElementById('customTopK');
+  const customMinPInput = document.getElementById('customMinP');
+  const customRepeatPenaltyInput = document.getElementById('customRepeatPenalty');
+  const customPresencePenaltyInput = document.getElementById('customPresencePenalty');
+  const autoTriggerAiOnHoverInput = document.getElementById('autoTriggerAiOnHover');
+  const testAiBtn = document.getElementById('testAiBtn');
+  const aiTestStatus = document.getElementById('aiTestStatus');
   const aiPromptExtensionInput = document.getElementById('aiPromptExtension');
   const ankiConnectUrlInput = document.getElementById('ankiConnectUrl');
   const testAnkiBtn = document.getElementById('testAnkiBtn');
@@ -19,11 +37,108 @@ document.addEventListener('DOMContentLoaded', () => {
   const dictStatus = document.getElementById('dictStatus');
   const dictListContainer = document.getElementById('dictListContainer');
   const selectedDictionaryIdInput = document.getElementById('selectedDictionaryId');
+  const cheaperSummaryModelIdInput = document.getElementById('cheaperSummaryModelId');
+  const enableCheaperSummaryModelInput = document.getElementById('enableCheaperSummaryModel');
+  const useFullContextInput = document.getElementById('useFullContext');
+  const enableWebGpuInput = document.getElementById('enableWebGpu');
+  const enableDevModeInput = document.getElementById('enableDevMode');
+  const devModeSettingsContainer = document.getElementById('devModeSettingsContainer');
+  const tmdbApiKeyInput = document.getElementById('tmdbApiKey');
   const modifierKeyInput = document.getElementById('modifierKey');
   const tooltipFontSizeInput = document.getElementById('tooltipFontSize');
   const saveButton = document.getElementById('save');
   const resetButton = document.getElementById('reset');
   const statusDiv = document.getElementById('status');
+
+  if (geminiModelSelect) {
+    geminiModelSelect.addEventListener('change', () => {
+      if (geminiModelSelect.value) {
+        modelIdInput.value = geminiModelSelect.value;
+      }
+    });
+  }
+
+  if (customModelSelect) {
+    customModelSelect.addEventListener('change', () => {
+      if (customModelSelect.value) {
+        customModelIdInput.value = customModelSelect.value;
+      }
+    });
+  }
+
+  function updateAiProviderVisibility() {
+    if (!aiProviderSelect) return;
+    const isCustom = aiProviderSelect.value === 'custom';
+    if (geminiSettingsContainer) geminiSettingsContainer.style.display = isCustom ? 'none' : 'block';
+    if (customAiSettingsContainer) customAiSettingsContainer.style.display = isCustom ? 'block' : 'none';
+  }
+
+  if (aiProviderSelect) {
+    aiProviderSelect.addEventListener('change', updateAiProviderVisibility);
+  }
+
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const url = btn.getAttribute('data-url');
+      const model = btn.getAttribute('data-model');
+      if (url && customEndpointUrlInput) customEndpointUrlInput.value = url;
+      if (model && customModelIdInput) customModelIdInput.value = model;
+    });
+  });
+
+  if (testAiBtn) {
+    testAiBtn.addEventListener('click', () => {
+      const provider = aiProviderSelect ? aiProviderSelect.value : 'gemini';
+      const payload = {
+        aiProvider: provider,
+        apiKey: apiKeyInput ? apiKeyInput.value.trim() : '',
+        modelId: modelIdInput ? modelIdInput.value.trim() : '',
+        customEndpointUrl: customEndpointUrlInput ? customEndpointUrlInput.value.trim() : '',
+        customModelId: customModelIdInput ? customModelIdInput.value.trim() : '',
+        customApiKey: customApiKeyInput ? customApiKeyInput.value.trim() : ''
+      };
+      if (aiTestStatus) {
+        aiTestStatus.textContent = 'Testing connection...';
+        aiTestStatus.style.color = '#555';
+      }
+      chrome.runtime.sendMessage({ type: 'testAiEndpoint', data: payload }, (res) => {
+        if (!aiTestStatus) return;
+        if (chrome.runtime.lastError || !res || !res.success) {
+          const err = res?.error || chrome.runtime.lastError?.message || 'Connection failed';
+          aiTestStatus.textContent = `✗ Error: ${err}`;
+          aiTestStatus.style.color = '#8b261e';
+        } else {
+          const countStr = typeof res.count === 'number' ? ` (${res.count} model${res.count === 1 ? '' : 's'} available)` : '';
+          aiTestStatus.textContent = `✓ Connected successfully!${countStr}`;
+          aiTestStatus.style.color = '#2f5d62';
+
+          if (Array.isArray(res.models) && res.models.length > 0) {
+            if (provider === 'custom' && customModelSelect) {
+              customModelSelect.innerHTML = `<option value="">-- Discovered Models (${res.models.length}) --</option>`;
+              res.models.forEach((m) => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                if (customModelIdInput && customModelIdInput.value.trim() === m) opt.selected = true;
+                customModelSelect.appendChild(opt);
+              });
+              customModelSelect.style.display = 'block';
+            } else if (provider === 'gemini' && geminiModelSelect) {
+              geminiModelSelect.innerHTML = `<option value="">-- Discovered Models (${res.models.length}) --</option>`;
+              res.models.forEach((m) => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                if (modelIdInput && modelIdInput.value.trim() === m) opt.selected = true;
+                geminiModelSelect.appendChild(opt);
+              });
+              geminiModelSelect.style.display = 'block';
+            }
+          }
+        }
+      });
+    });
+  }
 
   let currentDictOrder = [];
   let savedFieldMapping = {};
@@ -92,7 +207,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (d.id === currentSelected) opt.selected = true;
       selectedDictionaryIdInput.appendChild(opt);
 
-      const isRerankerEnabled = Boolean(enableOnnxRerankerInput && enableOnnxRerankerInput.checked);
+      const isDevMode = Boolean(enableDevModeInput && enableDevModeInput.checked);
+      const isRerankerEnabled = isDevMode && Boolean(enableOnnxRerankerInput && enableOnnxRerankerInput.checked);
       const vectorSection = document.getElementById('vectorPrecomputationSection');
       if (vectorSection) {
         vectorSection.style.display = isRerankerEnabled ? 'block' : 'none';
@@ -123,6 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div>
               <strong>${escapeHtml(d.title || d.id)}</strong>
               <span class="muted" style="font-size:0.85rem; margin-left:8px;">${(d.wordCount || 0).toLocaleString()} words</span>
+              ${d.targetLanguage ? `<span class="chip" style="margin-left:6px; font-size:0.75rem; text-transform:uppercase; background:#e0f2fe; color:#0369a1;">${escapeHtml(d.targetLanguage)}</span>` : ''}
               <span class="chip" style="margin-left:8px; font-size:0.75rem;">Priority #${idx + 1}</span>
             </div>
             <div style="display:flex; gap:6px;">
@@ -274,6 +391,8 @@ document.addEventListener('DOMContentLoaded', () => {
         dictStatus.textContent = 'Preparing files for dictionary import...';
         let allTermBanksData = [];
         let detectedTitle = null;
+        let detectedSourceLang = null;
+        let detectedTargetLang = null;
 
         for (let fIdx = 0; fIdx < files.length; fIdx++) {
           const file = files[fIdx];
@@ -286,7 +405,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (zip.files['index.json']) {
               const indexRaw = await zip.files['index.json'].async('string');
               const indexObj = JSON.parse(indexRaw);
-              if (indexObj && indexObj.title) detectedTitle = indexObj.title;
+              if (indexObj) {
+                if (indexObj.title) detectedTitle = indexObj.title;
+                if (indexObj.sourceLanguage) detectedSourceLang = indexObj.sourceLanguage;
+                if (indexObj.targetLanguage) detectedTargetLang = indexObj.targetLanguage;
+              }
             }
             const termBankFileNames = Object.keys(zip.files).filter(name => name.includes('term_bank_') && name.endsWith('.json'));
             for (const tbName of termBankFileNames) {
@@ -296,13 +419,39 @@ document.addEventListener('DOMContentLoaded', () => {
           } else if (file.name.endsWith('.json')) {
             const content = await new Promise(r => { const reader = new FileReader(); reader.onload = (e) => r(e.target.result); reader.readAsText(file); });
             const parsed = JSON.parse(content);
-            if (file.name === 'index.json') { if (parsed && parsed.title) detectedTitle = parsed.title; }
-            else if (Array.isArray(parsed)) allTermBanksData.push(parsed);
-            else if (parsed && Array.isArray(parsed.words)) allTermBanksData.push(parsed.words);
+            if (file.name === 'index.json') {
+              if (parsed) {
+                if (parsed.title) detectedTitle = parsed.title;
+                if (parsed.sourceLanguage) detectedSourceLang = parsed.sourceLanguage;
+                if (parsed.targetLanguage) detectedTargetLang = parsed.targetLanguage;
+              }
+            } else if (Array.isArray(parsed)) {
+              allTermBanksData.push(parsed);
+            } else if (parsed && Array.isArray(parsed.words)) {
+              allTermBanksData.push(parsed.words);
+            }
           }
         }
 
+        function inferTargetLanguage(title) {
+          if (!title || typeof title !== 'string') return '';
+          const t = title.toLowerCase();
+          if (/\b(ja|jpn|japanese|일본어|일어|日本語)\b/i.test(t) || t.includes(' ja') || t.includes('japanese') || t.includes('일본어')) {
+            return 'ja';
+          }
+          if (/\b(en|eng|english|영어|英語)\b/i.test(t) || t.includes(' en') || t.includes('english') || t.includes('영어')) {
+            return 'en';
+          }
+          if (/\b(ko|kor|korean|한국어|국어|韓国語)\b/i.test(t) || t.includes(' ko') || t.includes('korean') || t.includes('국어') || t.includes('한국어')) {
+            return 'ko';
+          }
+          return '';
+        }
+
         const dictTitle = detectedTitle || files[0].name.replace(/\.(zip|json)$/i, '') || 'Imported Dictionary';
+        const sourceLang = detectedSourceLang || 'kor';
+        const targetLang = detectedTargetLang || inferTargetLanguage(dictTitle);
+        const dictMeta = { sourceLanguage: sourceLang, targetLanguage: targetLang };
         const dictId = `dict_${Date.now().toString(36)}`;
         let entriesToInsert = [];
         let itemIndex = 0;
@@ -311,25 +460,32 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!Array.isArray(dataArray)) continue;
           for (const item of dataArray) {
             if (item && typeof item === 'object' && item.surface && item.definitions) {
-              entriesToInsert.push({ ...item, dictId, dictTitle });
+              entriesToInsert.push({ ...item, dictId, dictTitle, dictTargetLanguage: targetLang, dictSourceLanguage: sourceLang });
             } else {
               const parsed = window.DictionaryDB.parseKrdictTermItem(item, `${dictId}_term_${itemIndex++}`);
               if (parsed) {
                 parsed.dictId = dictId;
                 parsed.dictTitle = dictTitle;
+                parsed.dictTargetLanguage = targetLang;
+                parsed.dictSourceLanguage = sourceLang;
                 entriesToInsert.push(parsed);
               }
             }
           }
         }
 
+        // Merge sequenced multi-row entries before chunking
+        const mergedEntries = (window.DictionaryDB && typeof window.DictionaryDB.mergeSequencedEntries === 'function')
+          ? window.DictionaryDB.mergeSequencedEntries(entriesToInsert)
+          : entriesToInsert;
+
         const chunkSize = 2000;
         let insertedTotal = 0;
-        for (let i = 0; i < entriesToInsert.length; i += chunkSize) {
-          const chunk = entriesToInsert.slice(i, i + chunkSize);
-          await window.DictionaryDB.insertEntries(chunk, dictId, dictTitle);
+        for (let i = 0; i < mergedEntries.length; i += chunkSize) {
+          const chunk = mergedEntries.slice(i, i + chunkSize);
+          await window.DictionaryDB.insertEntries(chunk, dictId, dictTitle, dictMeta);
           insertedTotal += chunk.length;
-          dictStatus.textContent = `Inserted ${insertedTotal.toLocaleString()} / ${entriesToInsert.length.toLocaleString()} terms...`;
+          dictStatus.textContent = `Inserted ${insertedTotal.toLocaleString()} / ${mergedEntries.length.toLocaleString()} terms...`;
         }
 
         dictFileInput.value = '';
@@ -396,13 +552,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const userText = aiPromptExtensionInput ? aiPromptExtensionInput.value : '';
     const reservedKeys = new Set(['words_analysis', 'words', 'analysis', 'conjugation']);
 
-    // Match keys with or without quotes: "german_definition": or german_definition:
-    const customKeyMatches = userText.matchAll(/["']?([a-zA-Z0-9_]{3,40})["']?\s*:/g);
+    const reservedWords = new Set([
+      'and', 'the', 'for', 'with', 'from', 'words', 'analysis', 'rules',
+      'words_analysis', 'pos', 'surface', 'base', 'definitions', 'grammar_notes',
+      'conjugation', 'sentence', 'context', 'korean', 'return', 'only', 'valid', 'json',
+      'string', 'array', 'object', 'number', 'boolean', 'field', 'fields', 'value', 'values',
+      'custom', 'extra', 'additional', 'following', 'containing', 'translation', 'definition'
+    ]);
+
+    const customKeyMatches = [
+      ...userText.matchAll(/[\("'`]\s*([a-zA-Z0-9_]{3,40})\s*[\)"'`]/g),
+      ...userText.matchAll(/\{\{([a-zA-Z0-9_]{3,40})\}\}/g),
+      ...userText.matchAll(/["'`]?([a-zA-Z0-9_]{3,40})["'`]?\s*:/g),
+      ...userText.matchAll(/(?:as|field|key|named|\()\s*["'(`]?([a-zA-Z0-9_]{3,40})["')`]?/g),
+      ...userText.matchAll(/["'`(]?([a-zA-Z0-9_]{3,40})["'`)']?\s+(?:field|key)\b/gi),
+      ...userText.matchAll(/\b([a-z][a-z0-9_]{2,30}_(?:translation|def|definition|meaning|field|note|nuance|romaji|reading|kana|kanji))\b/gi)
+    ];
 
     for (const m of customKeyMatches) {
       const key = m[1];
+      if (reservedWords.has(key.toLowerCase())) continue;
+      if (!key.includes('_') && !/^[a-z]+[A-Z]/.test(key) && !['nuance', 'reading', 'hanja', 'synopsis', 'etymology', 'pitch', 'romaji'].includes(key.toLowerCase())) continue;
       const val = `{{${key}}}`;
-      if (!existingValues.has(val) && !reservedKeys.has(key)) {
+      if (!existingValues.has(val)) {
         existingValues.add(val);
         const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (Custom Prompt Field)';
         opts.push({ value: val, label });
@@ -439,7 +611,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!url || !selectedModel) return;
     try {
       const fields = await callAnkiConnect(url, 'modelFieldNames', { modelName: selectedModel });
-      const currentDefField = ankiDefinitionFieldSelect.getAttribute('data-value') || 'Back';
+      const currentDefField = ankiDefinitionFieldSelect.value || ankiDefinitionFieldSelect.getAttribute('data-value') || 'Back';
+      ankiDefinitionFieldSelect.setAttribute('data-value', currentDefField);
       ankiDefinitionFieldSelect.innerHTML = fields.map(f => `<option value="${escapeHtml(f)}" ${f === currentDefField ? 'selected' : ''}>${escapeHtml(f)}</option>`).join('');
       let containerHtml = '';
       const dynamicOptions = getDynamicFieldValueOptions();
@@ -477,38 +650,93 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (testAnkiBtn) testAnkiBtn.addEventListener('click', () => testAnkiConnection(true));
   if (ankiNoteTypeSelect) ankiNoteTypeSelect.addEventListener('change', updateAnkiModelFields);
-
-  const useFullContextInput = document.getElementById('useFullContext');
-  const enableCheaperSummaryModelInput = document.getElementById('enableCheaperSummaryModel');
-  const cheaperSummaryModelIdInput = document.getElementById('cheaperSummaryModelId');
-  const responseLanguageInput = document.getElementById('responseLanguage');
-  const customResponseLanguageInput = document.getElementById('customResponseLanguage');
-  const customLanguageContainer = document.getElementById('customLanguageContainer');
-
-  if (responseLanguageInput && customLanguageContainer) {
-    responseLanguageInput.addEventListener('change', () => {
-      customLanguageContainer.style.display = responseLanguageInput.value === 'Custom' ? 'block' : 'none';
+  if (ankiDefinitionFieldSelect) {
+    ankiDefinitionFieldSelect.addEventListener('change', () => {
+      ankiDefinitionFieldSelect.setAttribute('data-value', ankiDefinitionFieldSelect.value);
     });
   }
 
-  const enableWebGpuInput = document.getElementById('enableWebGpu');
-
-  chrome.storage.local.get(['apiKey', 'modelId', 'aiPromptExtension', 'responseLanguage', 'customResponseLanguage', 'enableOnnxReranker', 'enableWebGpu', 'useFullContext', 'enableCheaperSummaryModel', 'cheaperSummaryModelId', 'selectedDictionaryId', 'modifierKey', 'tooltipFontSize', 'ankiConnectUrl', 'ankiDeckName', 'ankiNoteType', 'ankiFieldMapping', 'ankiDefinitionField', 'trackedGeminiFields'], (result) => {
+  chrome.storage.local.get([
+    'aiProvider',
+    'apiKey',
+    'modelId',
+    'customEndpointUrl',
+    'customModelId',
+    'customApiKey',
+    'autoTriggerAiOnHover',
+    'customDisableReasoning',
+    'customTemperature',
+    'customTopP',
+    'customTopK',
+    'customMinP',
+    'customRepeatPenalty',
+    'customPresencePenalty',
+    'aiPromptExtension',
+    'tmdbApiKey',
+    'enableDevMode',
+    'enableOnnxReranker',
+    'enableWebGpu',
+    'useFullContext',
+    'enableCheaperSummaryModel',
+    'cheaperSummaryModelId',
+    'selectedDictionaryId',
+    'modifierKey',
+    'tooltipFontSize',
+    'ankiConnectUrl',
+    'ankiDeckName',
+    'ankiNoteType',
+    'ankiFieldMapping',
+    'ankiDefinitionField',
+    'trackedGeminiFields'
+  ], (result) => {
     if (result.trackedGeminiFields) cachedTrackedGeminiFields = result.trackedGeminiFields;
+    if (aiProviderSelect) {
+      aiProviderSelect.value = result.aiProvider || 'custom';
+      updateAiProviderVisibility();
+    }
     if (result.apiKey) apiKeyInput.value = result.apiKey;
+    if (tmdbApiKeyInput && result.tmdbApiKey) tmdbApiKeyInput.value = result.tmdbApiKey;
     modelIdInput.value = result.modelId || 'gemini-flash-lite-latest';
+    if (customEndpointUrlInput) customEndpointUrlInput.value = result.customEndpointUrl || 'http://localhost:1234/v1';
+    if (customModelIdInput) customModelIdInput.value = result.customModelId || 'llama-3.2-3b-instruct';
+    if (customApiKeyInput) customApiKeyInput.value = result.customApiKey || '';
+    if (autoTriggerAiOnHoverInput) autoTriggerAiOnHoverInput.checked = Boolean(result.autoTriggerAiOnHover);
+    if (customDisableReasoningInput) customDisableReasoningInput.checked = Boolean(result.customDisableReasoning);
+    if (customTemperatureInput) customTemperatureInput.value = result.customTemperature !== undefined ? result.customTemperature : '0.2';
+    if (customTopPInput) customTopPInput.value = result.customTopP !== undefined ? result.customTopP : '0.9';
+    if (customTopKInput) customTopKInput.value = result.customTopK !== undefined ? result.customTopK : '40';
+    if (customMinPInput) customMinPInput.value = result.customMinP !== undefined ? result.customMinP : '0.05';
+    if (customRepeatPenaltyInput) customRepeatPenaltyInput.value = result.customRepeatPenalty !== undefined ? result.customRepeatPenalty : '1.1';
+    if (customPresencePenaltyInput) customPresencePenaltyInput.value = result.customPresencePenalty !== undefined ? result.customPresencePenalty : '0.0';
     if (aiPromptExtensionInput) aiPromptExtensionInput.value = result.aiPromptExtension || '';
-    if (responseLanguageInput) {
-      responseLanguageInput.value = result.responseLanguage || 'English';
-      if (customLanguageContainer) {
-        customLanguageContainer.style.display = responseLanguageInput.value === 'Custom' ? 'block' : 'none';
+
+    function updateDevModeVisibility() {
+      const isDev = Boolean(enableDevModeInput && enableDevModeInput.checked);
+      if (devModeSettingsContainer) {
+        devModeSettingsContainer.style.display = isDev ? 'block' : 'none';
+      }
+      const vectorSection = document.getElementById('vectorPrecomputationSection');
+      if (vectorSection) {
+        const isReranker = isDev && Boolean(enableOnnxRerankerInput && enableOnnxRerankerInput.checked);
+        vectorSection.style.display = isReranker ? 'block' : 'none';
       }
     }
-    if (customResponseLanguageInput) customResponseLanguageInput.value = result.customResponseLanguage || '';
+
+    if (enableDevModeInput) {
+      enableDevModeInput.checked = Boolean(result.enableDevMode);
+      updateDevModeVisibility();
+      enableDevModeInput.addEventListener('change', () => {
+        chrome.storage.local.set({ enableDevMode: enableDevModeInput.checked });
+        updateDevModeVisibility();
+        updateDictStatus();
+      });
+    }
+
     enableOnnxRerankerInput.checked = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : false;
     if (enableOnnxRerankerInput) {
       enableOnnxRerankerInput.addEventListener('change', () => {
         chrome.storage.local.set({ enableOnnxReranker: enableOnnxRerankerInput.checked });
+        updateDevModeVisibility();
         updateDictStatus();
       });
     }
@@ -538,15 +766,43 @@ document.addEventListener('DOMContentLoaded', () => {
     testAnkiConnection(false);
   });
 
+  const clearTmdbCacheBtn = document.getElementById('clearTmdbCacheBtn');
+  const tmdbCacheStatus = document.getElementById('tmdbCacheStatus');
+  if (clearTmdbCacheBtn) {
+    clearTmdbCacheBtn.addEventListener('click', () => {
+      chrome.storage.local.set({ netflixTmdbMap: {} }, () => {
+        if (tmdbCacheStatus) {
+          tmdbCacheStatus.textContent = '✓ TMDB cache cleared!';
+          setTimeout(() => { tmdbCacheStatus.textContent = ''; }, 3000);
+        }
+      });
+    });
+  }
+
   resetButton.addEventListener('click', () => {
+    if (aiProviderSelect) aiProviderSelect.value = 'custom';
+    updateAiProviderVisibility();
     apiKeyInput.value = '';
     modelIdInput.value = 'gemini-flash-lite-latest';
+    if (customEndpointUrlInput) customEndpointUrlInput.value = 'http://localhost:1234/v1';
+    if (customModelIdInput) customModelIdInput.value = 'llama-3.2-3b-instruct';
+    if (customApiKeyInput) customApiKeyInput.value = '';
+    if (autoTriggerAiOnHoverInput) autoTriggerAiOnHoverInput.checked = false;
+    if (customDisableReasoningInput) customDisableReasoningInput.checked = false;
+    if (customTemperatureInput) customTemperatureInput.value = '0.2';
+    if (customTopPInput) customTopPInput.value = '0.9';
+    if (customTopKInput) customTopKInput.value = '40';
+    if (customMinPInput) customMinPInput.value = '0.05';
+    if (customRepeatPenaltyInput) customRepeatPenaltyInput.value = '1.1';
+    if (customPresencePenaltyInput) customPresencePenaltyInput.value = '0.0';
+    if (tmdbApiKeyInput) tmdbApiKeyInput.value = '';
     if (aiPromptExtensionInput) aiPromptExtensionInput.value = '';
-    if (responseLanguageInput) responseLanguageInput.value = 'English';
-    if (customResponseLanguageInput) customResponseLanguageInput.value = '';
-    if (customLanguageContainer) customLanguageContainer.style.display = 'none';
+    if (enableDevModeInput) enableDevModeInput.checked = false;
     enableOnnxRerankerInput.checked = false;
     if (enableWebGpuInput) enableWebGpuInput.checked = false;
+    if (devModeSettingsContainer) devModeSettingsContainer.style.display = 'none';
+    const vectorSection = document.getElementById('vectorPrecomputationSection');
+    if (vectorSection) vectorSection.style.display = 'none';
     updateDictStatus();
     if (useFullContextInput) useFullContextInput.checked = false;
     if (enableCheaperSummaryModelInput) enableCheaperSummaryModelInput.checked = false;
@@ -554,19 +810,38 @@ document.addEventListener('DOMContentLoaded', () => {
     if (selectedDictionaryIdInput) selectedDictionaryIdInput.value = 'all';
     if (modifierKeyInput) modifierKeyInput.value = 'Shift';
     if (tooltipFontSizeInput) tooltipFontSizeInput.value = '15';
-    ankiConnectUrlInput.value = 'http://127.0.0.1:8765';
+    if (customModelSelect) {
+      customModelSelect.innerHTML = '<option value="">-- Discovered Models --</option>';
+      customModelSelect.style.display = 'none';
+    }
+    if (geminiModelSelect) {
+      geminiModelSelect.innerHTML = '<option value="">-- Discovered Models --</option>';
+      geminiModelSelect.style.display = 'none';
+    }
     statusDiv.textContent = 'Defaults restored locally. Click Save to store them.';
     statusDiv.className = 'success';
   });
 
   saveButton.addEventListener('click', () => {
+    const aiProvider = aiProviderSelect ? aiProviderSelect.value : 'custom';
     const apiKey = apiKeyInput.value.trim();
     const modelId = modelIdInput.value.trim();
+    const tmdbApiKey = tmdbApiKeyInput ? tmdbApiKeyInput.value.trim() : '';
+    const customEndpointUrl = customEndpointUrlInput ? customEndpointUrlInput.value.trim() : '';
+    const customModelId = customModelIdInput ? customModelIdInput.value.trim() : '';
+    const customApiKey = customApiKeyInput ? customApiKeyInput.value.trim() : '';
+    const autoTriggerAiOnHover = autoTriggerAiOnHoverInput ? autoTriggerAiOnHoverInput.checked : false;
+    const customDisableReasoning = customDisableReasoningInput ? customDisableReasoningInput.checked : false;
+    const customTemperature = customTemperatureInput ? customTemperatureInput.value.trim() : '0.2';
+    const customTopP = customTopPInput ? customTopPInput.value.trim() : '0.9';
+    const customTopK = customTopKInput ? customTopKInput.value.trim() : '40';
+    const customMinP = customMinPInput ? customMinPInput.value.trim() : '0.05';
+    const customRepeatPenalty = customRepeatPenaltyInput ? customRepeatPenaltyInput.value.trim() : '1.1';
+    const customPresencePenalty = customPresencePenaltyInput ? customPresencePenaltyInput.value.trim() : '0.0';
     const aiPromptExtension = aiPromptExtensionInput ? aiPromptExtensionInput.value.trim() : '';
-    const responseLanguage = responseLanguageInput ? responseLanguageInput.value : 'English';
-    const customResponseLanguage = customResponseLanguageInput ? customResponseLanguageInput.value.trim() : '';
+    const enableDevMode = enableDevModeInput ? enableDevModeInput.checked : false;
     const enableOnnxReranker = enableOnnxRerankerInput.checked;
-    const enableWebGpu = enableWebGpuInput ? enableWebGpuInput.checked : true;
+    const enableWebGpu = enableWebGpuInput ? enableWebGpuInput.checked : false;
     const useFullContext = useFullContextInput ? useFullContextInput.checked : false;
     const enableCheaperSummaryModel = enableCheaperSummaryModelInput ? enableCheaperSummaryModelInput.checked : false;
     const cheaperSummaryModelId = cheaperSummaryModelIdInput ? cheaperSummaryModelIdInput.value.trim() : 'gemini-flash-lite-latest';
@@ -589,8 +864,37 @@ document.addEventListener('DOMContentLoaded', () => {
     cachedTrackedGeminiFields = updatedTrackedFields;
 
     const dataToSave = {
-      apiKey, modelId: modelId || 'gemini-flash-lite-latest', aiPromptExtension, responseLanguage, customResponseLanguage, enableOnnxReranker, enableWebGpu, useFullContext, enableCheaperSummaryModel, cheaperSummaryModelId, selectedDictionaryId, modifierKey, tooltipFontSize, ankiConnectUrl, ankiDeckName, ankiNoteType,
-      ankiFieldMapping: JSON.stringify(savedFieldMapping, null, 2), ankiDefinitionField, dictionaryOrder: currentDictOrder,
+      aiProvider,
+      apiKey,
+      tmdbApiKey,
+      modelId: modelId || 'gemini-flash-lite-latest',
+      customEndpointUrl,
+      customModelId,
+      customApiKey,
+      autoTriggerAiOnHover,
+      customDisableReasoning,
+      customTemperature,
+      customTopP,
+      customTopK,
+      customMinP,
+      customRepeatPenalty,
+      customPresencePenalty,
+      aiPromptExtension,
+      enableDevMode,
+      enableOnnxReranker,
+      enableWebGpu,
+      useFullContext,
+      enableCheaperSummaryModel,
+      cheaperSummaryModelId,
+      selectedDictionaryId,
+      modifierKey,
+      tooltipFontSize,
+      ankiConnectUrl,
+      ankiDeckName,
+      ankiNoteType,
+      ankiFieldMapping: JSON.stringify(savedFieldMapping, null, 2),
+      ankiDefinitionField,
+      dictionaryOrder: currentDictOrder,
       trackedGeminiFields: updatedTrackedFields
     };
     chrome.storage.local.set(dataToSave, () => {
@@ -598,7 +902,11 @@ document.addEventListener('DOMContentLoaded', () => {
         statusDiv.textContent = `Error saving settings: ${chrome.runtime.lastError.message}`;
         statusDiv.className = 'error';
       } else {
-        statusDiv.textContent = apiKey ? 'Settings saved successfully!' : 'Local settings saved! (Add a Gemini API Key to enable AI explanations).';
+        const isCustom = aiProvider === 'custom';
+        const msg = isCustom
+          ? 'Settings saved successfully with Custom OpenAI endpoint!'
+          : (apiKey ? 'Settings saved successfully with Gemini!' : 'Local settings saved! (Add a Gemini API Key or switch to Local AI to enable AI explanations).');
+        statusDiv.textContent = msg;
         statusDiv.className = 'success';
         updateAnkiModelFields();
       }

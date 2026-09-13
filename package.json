@@ -26,8 +26,8 @@
   },
   "homepage": "https://github.com/adrian-rossa/munmek#readme",
   "dependencies": {
-    "garu-ko": "^0.9.12",
     "jszip": "^3.10.1",
+    "kiwi-nlp": "^0.23.0",
     "onnxruntime-web": "^1.27.0"
   },
   "devDependencies": {

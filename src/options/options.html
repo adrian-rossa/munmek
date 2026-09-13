@@ -18,16 +18,131 @@
 
     <div class="grid">
       <section class="card">
-        <h2>Gemini</h2>
-        <div class="inline-grid">
-          <div>
-            <label for="apiKey">API Key</label>
-            <input type="password" id="apiKey" placeholder="Enter your Gemini API key">
+        <h2>LLM Contextual Analysis Backend</h2>
+        
+        <label for="aiProvider">LLM Backend Provider</label>
+        <select id="aiProvider" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink); margin-bottom: 14px;">
+          <option value="custom" selected>Local LLM / Custom OpenAI-Compatible (LM Studio, Ollama, llama.cpp)</option>
+          <option value="gemini">Google Gemini (Official Cloud API)</option>
+        </select>
+
+        <!-- Gemini Settings -->
+        <div id="geminiSettingsContainer" style="display: none;">
+          <div class="inline-grid">
+            <div>
+              <label for="apiKey">Gemini API Key</label>
+              <input type="password" id="apiKey" placeholder="Enter your Gemini API key">
+            </div>
+            <div>
+              <label for="modelId">Gemini Model ID</label>
+              <input type="text" id="modelId" placeholder="gemini-flash-lite-latest">
+              <select id="geminiModelSelect" style="display: none; margin-top: 6px; font-size: 0.85rem; padding: 6px 10px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff;">
+                <option value="">-- Discovered Models --</option>
+              </select>
+            </div>
           </div>
-          <div>
-            <label for="modelId">Model ID</label>
-            <input type="text" id="modelId" placeholder="gemini-flash-lite-latest">
+        </div>
+
+        <!-- Custom OpenAI Compatible Endpoint Settings -->
+        <div id="customAiSettingsContainer">
+          <div class="hint" style="margin-bottom: 12px; background: #f3f9f8; padding: 10px 12px; border-radius: 10px; border: 1px solid #d1e7e4; color: #17383b;">
+            💡 <strong>Local LLM & Self-Hosted Models:</strong> Connect to local LLMs (LM Studio, llama.cpp server, Ollama) or any OpenAI-compatible endpoint. No cloud API keys or internet connection required for local servers!
           </div>
+
+          <details style="margin-bottom: 14px; background: #faf8f5; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;">
+            <summary style="font-weight: 700; cursor: pointer; color: #2f5d62;">📖 Quick Setup Guide: Local LLM (Speed & Model Recommendations)</summary>
+            <div style="margin-top: 10px; font-size: 0.88rem; line-height: 1.5; color: var(--ink);">
+              <p><strong>1. Recommended Models for Speed & Grammar Nuance:</strong><br>
+              For instantaneous hover lookups (&lt;500ms), we recommend lightweight ~2B–4B instruction-tuned models with fast tokens/sec:</p>
+              <ul style="margin: 4px 0 8px 18px;">
+                <li><code>gemma-4-E2B-it-Q4_K_M</code> or <code>gemma-2-2b-it</code> (Ultra-fast, excellent Korean grammar comprehension)</li>
+                <li><code>llama-3.2-3b-instruct</code> (Very responsive, great JSON schema compliance)</li>
+                <li><code>qwen2.5-3b-instruct</code> or <code>qwen2.5-7b-instruct</code> (Superb multilingual East Asian language support)</li>
+              </ul>
+              <p><strong>2. Setup in 1 Minute:</strong></p>
+              <ul style="margin: 4px 0 8px 18px;">
+                <li><strong>LM Studio:</strong> Load your model, open the <em>Developer / Local Server</em> tab (double-arrow icon), and click <em>Start Server</em>. Keep default URL <code>http://localhost:1234/v1</code>. Ensure CORS is enabled.</li>
+                <li><strong>Ollama:</strong> Run <code>ollama run llama3.2</code>. Ollama serves OpenAI-compatible endpoints at <code>http://localhost:11434/v1</code>. (Set <code>OLLAMA_ORIGINS="*"</code> if you encounter CORS issues).</li>
+                <li><strong>llama.cpp:</strong> Launch server: <code>llama-server -m your_model.gguf --port 8080</code> and use URL <code>http://127.0.0.1:8080/v1</code>.</li>
+              </ul>
+            </div>
+          </details>
+
+          <label for="customEndpointUrl">Endpoint Base URL</label>
+          <input type="text" id="customEndpointUrl" placeholder="http://localhost:1234/v1" style="width: 100%;">
+          
+          <div style="display: flex; gap: 8px; margin-top: 6px; margin-bottom: 14px; flex-wrap: wrap;">
+            <span class="muted" style="font-size: 0.8rem; align-self: center;">Quick Presets:</span>
+            <button type="button" class="preset-btn" data-url="http://localhost:1234/v1" data-model="local-model" style="font-size: 0.8rem; padding: 4px 10px; background: #e8e3d9; color: var(--ink);">LM Studio</button>
+            <button type="button" class="preset-btn" data-url="http://localhost:11434/v1" data-model="llama3.2" style="font-size: 0.8rem; padding: 4px 10px; background: #e8e3d9; color: var(--ink);">Ollama</button>
+            <button type="button" class="preset-btn" data-url="http://127.0.0.1:8080/v1" data-model="default" style="font-size: 0.8rem; padding: 4px 10px; background: #e8e3d9; color: var(--ink);">llama.cpp server</button>
+          </div>
+
+          <div class="inline-grid">
+            <div>
+              <label for="customModelId">Model Name / ID</label>
+              <input type="text" id="customModelId" placeholder="e.g. llama-3.2-3b-instruct, qwen2.5-7b">
+              <select id="customModelSelect" style="display: none; margin-top: 6px; font-size: 0.85rem; padding: 6px 10px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff;">
+                <option value="">-- Discovered Models --</option>
+              </select>
+            </div>
+            <div>
+              <label for="customApiKey">API Key <span class="muted" style="font-weight: 400;">(Optional for local AI)</span></label>
+              <input type="password" id="customApiKey" placeholder="Optional (e.g. sk-...)">
+            </div>
+          </div>
+
+          <details style="margin-top: 14px; background: #faf8f5; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;">
+            <summary style="font-weight: 700; cursor: pointer; color: var(--ink);">⚙️ Advanced Sampling & Reasoning Parameters</summary>
+            
+            <div style="margin-top: 12px; display: grid; gap: 12px;">
+              <label style="display:flex; gap:10px; align-items:center; font-weight:700;">
+                <input type="checkbox" id="customDisableReasoning" style="width:auto;">
+                Disable Reasoning / Thinking (for DeepSeek-R1 / QwQ / o-series)
+              </label>
+              <div class="hint">Instructs the endpoint to disable thinking/reasoning tokens and automatically strips &lt;think&gt;...&lt;/think&gt; tags from model output.</div>
+
+              <div class="inline-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px;">
+                <div>
+                  <label for="customTemperature" style="font-size: 0.86rem;">Temperature</label>
+                  <input type="number" id="customTemperature" step="0.05" min="0" max="2" placeholder="0.2">
+                </div>
+                <div>
+                  <label for="customTopP" style="font-size: 0.86rem;">Top-P</label>
+                  <input type="number" id="customTopP" step="0.05" min="0" max="1" placeholder="0.9">
+                </div>
+                <div>
+                  <label for="customTopK" style="font-size: 0.86rem;">Top-K</label>
+                  <input type="number" id="customTopK" step="1" min="0" max="200" placeholder="40">
+                </div>
+                <div>
+                  <label for="customMinP" style="font-size: 0.86rem;">Min-P</label>
+                  <input type="number" id="customMinP" step="0.01" min="0" max="1" placeholder="0.05">
+                </div>
+                <div>
+                  <label for="customRepeatPenalty" style="font-size: 0.86rem;">Repeat Penalty</label>
+                  <input type="number" id="customRepeatPenalty" step="0.05" min="0" max="3" placeholder="1.1">
+                </div>
+                <div>
+                  <label for="customPresencePenalty" style="font-size: 0.86rem;">Presence Penalty</label>
+                  <input type="number" id="customPresencePenalty" step="0.1" min="-2" max="2" placeholder="0.0">
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div style="margin-top: 14px; display: flex; gap: 10px; align-items: center;">
+          <button type="button" id="testAiBtn" style="padding: 9px 16px;">Test LLM Connection</button>
+          <div id="aiTestStatus" style="font-size: 0.88rem; font-weight: 700;"></div>
+        </div>
+
+        <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line);">
+          <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:6px;">
+            <input type="checkbox" id="autoTriggerAiOnHover" style="width:auto;">
+            Auto-Analyze on Hover (Local LLM mode)
+          </label>
+          <div class="hint">Automatically sends sentences to your LLM in the background as you hover over words, without needing to click the "Ask LLM" button. Perfect for fast, free local LLMs! (Includes intelligent sentence caching and 250ms hover debouncing).</div>
         </div>
 
         <label style="margin-top: 16px;">Fixed System Prompt (Enforces Contextual Analysis Schema)</label>
@@ -38,11 +153,12 @@ Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENC
 
 Rules:
 1. If '{WORD}' is a person's name or proper noun in context (e.g. before ~이에요/~예요/~야/~아/~씨/~님), set "pos": "proper noun" and definition to the name rather than forcing a dictionary homonym.
-2. Ground "grammar_notes" in the actual context of the surrounding sentences and scene.
+2. For "base", provide ONLY the clean Korean dictionary citation form (e.g. "부르다", NOT "부르다 (to call)"). Do not include English glosses, notes, or parentheses in "base".
+3. Ground "grammar_notes" in the actual context of the surrounding sentences and scene.
 
 Return JSON with "words_analysis": [{
   "surface": "{WORD}",
-  "base": "base form or name",
+  "base": "clean Korean citation lemma without English gloss or parentheses (e.g. 부르다)",
   "pos": "part of speech",
   "definitions": ["definition in context"],
   "conjugation": { "ending": "...", "explanation": "..." },
@@ -54,47 +170,61 @@ Return JSON with "words_analysis": [{
         <div class="hint">Appended to the system prompt. Add extra rules here (e.g. <code>Also append a Japanese translation to definitions</code> or <code>Add a "cultural_context" field</code>). Custom JSON fields added here automatically become available as Anki field mapping placeholders!</div>
         <textarea id="aiPromptExtension" placeholder="Add custom style constraints or instructions here..."></textarea>
 
-        <label for="responseLanguage" style="margin-top: 16px;">AI Response Language</label>
-        <div class="hint">Language for extension-wide AI responses (Ask Gemini and Quick LLM lookups). Injected into requests when a language other than English is selected.</div>
-        <select id="responseLanguage" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);">
-          <option value="English" selected>English (Default)</option>
-          <option value="German">German (Deutsch)</option>
-          <option value="Japanese">Japanese (日本語)</option>
-          <option value="Spanish">Spanish (Español)</option>
-          <option value="French">French (Français)</option>
-          <option value="Chinese">Chinese (中文)</option>
-          <option value="Korean">Korean (한국어)</option>
-          <option value="Custom">Custom Language...</option>
-        </select>
-        <div id="customLanguageContainer" style="display: none; margin-top: 8px;">
-          <input type="text" id="customResponseLanguage" placeholder="Specify language (e.g. Italian, Swedish, Portuguese...)" />
+      </section>
+
+      <section class="card">
+        <h2>Context Summarization & Media Extraction</h2>
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
+          <input type="checkbox" id="useFullContext" style="width:auto;">
+          Use full page context for LLM extraction (Higher token usage)
+        </label>
+        <div class="hint" style="margin-bottom:14px;">By default, extracted page/subtitle context is abbreviated (~3,000 input characters) before sending to the model to conserve tokens. Enable this to send up to 8,000 input characters. <em>(Note: The character length in the popup indicates raw input context size, which is summarized into a concise topic sentence before analysis).</em></div>
+
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:8px;">
+          <input type="checkbox" id="enableCheaperSummaryModel" style="width:auto;">
+          Use a separate model for LLM context summarization
+        </label>
+        <input type="text" id="cheaperSummaryModelId" placeholder="gemini-flash-lite-latest" style="margin-top:4px;">
+        <div class="hint" style="margin-bottom:14px;">Optionally specify a faster or cheaper model ID to summarize page context in the background.</div>
+
+        <label for="tmdbApiKey" style="font-weight: 700; margin-top: 10px; display: block;">The Movie Database (TMDB) API Key</label>
+        <input type="password" id="tmdbApiKey" placeholder="Enter your free TMDB API key (v3 auth)" style="margin-top:4px; width: 100%;">
+        <div class="hint">Used to automatically search and fetch Netflix TV show, movie, and episode synopses when starting a Munmek session on Netflix. (Get a free API key at <a href="https://www.themoviedb.org/settings/api" target="_blank" style="color: #2563eb;">themoviedb.org</a>).</div>
+        <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
+          <button type="button" id="clearTmdbCacheBtn" style="font-size: 0.82rem; padding: 5px 12px; background: #e8e3d9; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; cursor: pointer;">🗑 Clear TMDB Cache</button>
+          <span id="tmdbCacheStatus" style="font-size: 0.82rem; color: #2f5d62; font-weight: 700;"></span>
         </div>
       </section>
 
       <section class="card">
-        <h2>Pipeline & Context Summarization</h2>
+        <h2>Developer & Experimental Settings</h2>
         <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
-          <input type="checkbox" id="enableOnnxReranker" style="width:auto;">
-          Enable Stage 2 Definition Reranking & Confidence Scores (EXPERIMENTAL)
+          <input type="checkbox" id="enableDevMode" style="width:auto;">
+          Enable Developer Mode (Experimental Features)
         </label>
-        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
-          <input type="checkbox" id="enableWebGpu" style="width:auto;">
-          Enable WebGPU Hardware Acceleration for Stage 2 (Experimental)
-        </label>
-        <div class="hint" style="margin-bottom:14px;">Leverages your GPU for Stage 2 neural embeddings when supported, accelerating multi-definition reranking from seconds down to milliseconds. Automatically falls back to CPU WASM if unavailable.</div>
+        <div class="hint">Unlocks experimental definition sense reranking with Multilingual E5 ONNX, WebGPU acceleration, and dictionary vector precomputation.</div>
 
-        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
-          <input type="checkbox" id="useFullContext" style="width:auto;">
-          Use full page context for AI extraction (Higher token usage)
-        </label>
-        <div class="hint" style="margin-bottom:14px;">By default, extracted page/subtitle context is abbreviated (~3,000 input characters) before sending to Gemini to conserve API tokens. Enable this to send up to 8,000 input characters. <em>(Note: The character length in the popup indicates raw input context size, which is summarized into a concise topic sentence before analysis).</em></div>
+        <div id="devModeSettingsContainer" style="display: none; border-top: 1px dashed var(--line); padding-top: 14px; margin-top: 12px;">
+          <div class="hint" style="margin-bottom:14px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; padding:12px 14px; border-radius:12px; line-height:1.5;">
+            📦 <strong>Optional Model Notice (<code>multilingual_e5_small_int8.onnx</code>):</strong><br>
+            Stage 2 Cross-Lingual Definition Sense Disambiguation is an optional, experimental feature (~118 MB). To keep the repository lightweight, this model file is not bundled with the source repository.
+            <ul style="margin: 6px 0 6px 18px;">
+              <li><strong>Download from GitHub Releases:</strong> Download <code>multilingual_e5_small_int8.onnx</code> from the latest release assets and place it into <code>lib/models/</code>.</li>
+              <li><strong>Or Export Locally:</strong> Run <code>python scripts/export_multilingual_onnx.py</code> to export the INT8 ONNX model via Hugging Face Optimum.</li>
+            </ul>
+            <em>Note: If the ONNX model is not present, Munmek operates seamlessly using full-power Kiwi WASM morphological analysis and Stage 0/1 heuristics.</em>
+          </div>
 
-        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:8px;">
-          <input type="checkbox" id="enableCheaperSummaryModel" style="width:auto;">
-          Use a separate model for AI context summarization
-        </label>
-        <input type="text" id="cheaperSummaryModelId" placeholder="gemini-flash-lite-latest" style="margin-top:4px;">
-        <div class="hint">Optionally specify a faster or cheaper model ID to summarize page context background.</div>
+          <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
+            <input type="checkbox" id="enableOnnxReranker" style="width:auto;">
+            Enable Stage 2 Definition Reranking & Confidence Scores (EXPERIMENTAL)
+          </label>
+          <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
+            <input type="checkbox" id="enableWebGpu" style="width:auto;">
+            Enable WebGPU Hardware Acceleration for Stage 2 (Experimental)
+          </label>
+          <div class="hint" style="margin-bottom:14px;">Leverages your GPU for Stage 2 neural embeddings when supported, accelerating multi-definition reranking from seconds down to milliseconds. Automatically falls back to CPU WASM if unavailable.</div>
+        </div>
       </section>
 
       <section class="card">
@@ -178,8 +308,9 @@ Return JSON with "words_analysis": [{
               <select id="ankiNoteType" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);"></select>
             </div>
             <div>
-              <label for="ankiDefinitionField">Update Card Definition Field</label>
+              <label for="ankiDefinitionField">Default Definition Field (Simple Mode)</label>
               <select id="ankiDefinitionField" style="width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; font-size: 15px; background: #fff; color: var(--ink);"></select>
+              <div class="hint" style="margin-top: 4px;">Fallback target field for definitions when not using Advanced Field Mapping.</div>
             </div>
           </div>
 
