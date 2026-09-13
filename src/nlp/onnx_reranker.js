@@ -82,7 +82,7 @@
       return tokens;
     }
 
-    encode(text, maxLen = 64) {
+    encode(text, maxLen = 96) {
       const tokenIds = this.tokenize(text);
       const inputIds = [this.bosId];
       for (const tid of tokenIds) {
@@ -353,7 +353,7 @@
     }
   }
 
-  async function computeMultilingualEmbedding(text, maxLen = 64, enableWebGpuOverride = null) {
+  async function computeMultilingualEmbedding(text, maxLen = 96, enableWebGpuOverride = null) {
     const session = await initMultilingualSession(enableWebGpuOverride);
     if (session && multilingualTokenizerInstance) {
       try {
@@ -436,7 +436,7 @@
     return null;
   }
 
-  async function computeMultilingualEmbeddingsBatch(textsArray, maxLen = 64, enableWebGpuOverride = null) {
+  async function computeMultilingualEmbeddingsBatch(textsArray, maxLen = 96, enableWebGpuOverride = null) {
     if (!Array.isArray(textsArray) || textsArray.length === 0) return [];
     if (textsArray.length === 1) {
       const single = await computeMultilingualEmbedding(textsArray[0], maxLen, enableWebGpuOverride);
@@ -545,147 +545,12 @@
     return dot / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
-  function md5(str) {
-    if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-      try {
-        const crypto = require('crypto');
-        return crypto.createHash('md5').update(str, 'utf8').digest('hex');
-      } catch (e) {}
+  function hashString(str) {
+    let hash = 5381;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) + hash + str.charCodeAt(i)) & 0x7fffffff;
     }
-
-    function md5cycle(x, k) {
-      let a = x[0], b = x[1], c = x[2], d = x[3];
-
-      a = ff(a, b, c, d, k[0], 7, -680876936);
-      d = ff(d, a, b, c, k[1], 12, -389564586);
-      c = ff(c, d, a, b, k[2], 17, 606105819);
-      b = ff(b, c, d, a, k[3], 22, -1044525330);
-      a = ff(a, b, c, d, k[4], 7, -176418897);
-      d = ff(d, a, b, c, k[5], 12, 1200080426);
-      c = ff(c, d, a, b, k[6], 17, -1473231341);
-      b = ff(b, c, d, a, k[7], 22, -45705983);
-      a = ff(a, b, c, d, k[8], 7, 1770035416);
-      d = ff(d, a, b, c, k[9], 12, -1958414417);
-      c = ff(c, d, a, b, k[10], 17, -42063);
-      b = ff(b, c, d, a, k[11], 22, -1990404162);
-      a = ff(a, b, c, d, k[12], 7, 1804603682);
-      d = ff(d, a, b, c, k[13], 12, -40341101);
-      c = ff(c, d, a, b, k[14], 17, -1502002290);
-      b = ff(b, c, d, a, k[15], 22, 1236535329);
-
-      a = gg(a, b, c, d, k[1], 5, -165796510);
-      d = gg(d, a, b, c, k[6], 9, -1069501632);
-      c = gg(c, d, a, b, k[11], 14, 643717713);
-      b = gg(b, c, d, a, k[0], 20, -373897302);
-      a = gg(a, b, c, d, k[5], 5, -701558691);
-      d = gg(d, a, b, c, k[10], 9, 38016083);
-      c = gg(c, d, a, b, k[15], 14, -660478335);
-      b = gg(b, c, d, a, k[4], 20, -405537848);
-      a = gg(a, b, c, d, k[9], 5, 568446438);
-      d = gg(d, a, b, c, k[14], 9, -1019803690);
-      c = gg(c, d, a, b, k[3], 14, -187363961);
-      b = gg(b, c, d, a, k[8], 20, 1163531501);
-      a = gg(a, b, c, d, k[13], 5, -1444681467);
-      d = gg(d, a, b, c, k[2], 9, -51403784);
-      c = gg(c, d, a, b, k[7], 14, 1735328473);
-      b = gg(b, c, d, a, k[12], 20, -1926607734);
-
-      a = hh(a, b, c, d, k[5], 4, -378558);
-      d = hh(d, a, b, c, k[8], 11, -2022574463);
-      c = hh(c, d, a, b, k[11], 16, 1839030562);
-      b = hh(b, c, d, a, k[14], 23, -35309556);
-      a = hh(a, b, c, d, k[1], 4, -1530992060);
-      d = hh(d, a, b, c, k[4], 11, 1272893353);
-      c = hh(c, d, a, b, k[7], 16, -1554976322);
-      b = hh(b, c, d, a, k[10], 23, -1094730640);
-      a = hh(a, b, c, d, k[13], 4, 681279174);
-      d = hh(d, a, b, c, k[0], 11, -358537222);
-      c = hh(c, d, a, b, k[3], 16, -722521979);
-      b = hh(b, c, d, a, k[8], 23, 76029189);
-      a = hh(a, b, c, d, k[12], 4, -640364409);
-      d = hh(d, a, b, c, k[15], 11, -343485551);
-      c = hh(c, d, a, b, k[2], 16, -83305007);
-      b = hh(b, c, d, a, k[7], 23, 1985584974);
-
-      a = ii(a, b, c, d, k[0], 6, -198630844);
-      d = ii(d, a, b, c, k[7], 10, 1126891415);
-      c = ii(c, d, a, b, k[14], 15, -1416354905);
-      b = ii(b, c, d, a, k[5], 21, -57434055);
-      a = ii(a, b, c, d, k[12], 6, 1700485571);
-      d = ii(d, a, b, c, k[3], 10, -189498074);
-      c = ii(c, d, a, b, k[10], 15, -1051523);
-      b = ii(b, c, d, a, k[1], 21, -2054922799);
-      a = ii(a, b, c, d, k[8], 6, 1873313359);
-      d = ii(d, a, b, c, k[15], 10, -30611744);
-      c = ii(c, d, a, b, k[6], 15, -1560198380);
-      b = ii(b, c, d, a, k[13], 21, 1309151649);
-      a = ii(a, b, c, d, k[4], 6, -145523070);
-      d = ii(d, a, b, c, k[11], 10, -1120210379);
-      c = ii(c, d, a, b, k[2], 15, 718787259);
-      b = ii(b, c, d, a, k[9], 21, -343485551);
-
-      x[0] = add32(a, x[0]);
-      x[1] = add32(b, x[1]);
-      x[2] = add32(c, x[2]);
-      x[3] = add32(d, x[3]);
-    }
-
-    function add32(a, b) { return (a + b) & 0xFFFFFFFF; }
-    function cmn(q, a, b, x, s, t) {
-      a = add32(add32(a, q), add32(x, t));
-      return add32((a << s) | (a >>> (32 - s)), b);
-    }
-    function ff(a, b, c, d, x, s, t) { return cmn((b & c) | ((~b) & d), a, b, x, s, t); }
-    function gg(a, b, c, d, x, s, t) { return cmn((b & d) | (c & (~d)), a, b, x, s, t); }
-    function hh(a, b, c, d, x, s, t) { return cmn(b ^ c ^ d, a, b, x, s, t); }
-    function ii(a, b, c, d, x, s, t) { return cmn(c ^ (b | (~d)), a, b, x, s, t); }
-
-    function md51(s) {
-      const txt = unescape(encodeURIComponent(s));
-      const n = txt.length;
-      const state = [1732584193, -271733879, -1732584194, 271733878];
-      let i;
-      for (i = 64; i <= txt.length; i += 64) {
-        md5cycle(state, md5blk(txt.substring(i - 64, i)));
-      }
-      s = txt.substring(i - 64);
-      const tail = [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0];
-      for (i = 0; i < s.length; i++) {
-        tail[i >> 2] |= s.charCodeAt(i) << ((i % 4) << 3);
-      }
-      tail[i >> 2] |= 0x80 << ((i % 4) << 3);
-      if (i > 55) {
-        md5cycle(state, tail);
-        for (i = 0; i < 16; i++) tail[i] = 0;
-      }
-      tail[14] = n * 8;
-      md5cycle(state, tail);
-      return state;
-    }
-
-    function md5blk(s) {
-      const md5blks = [];
-      for (let i = 0; i < 64; i += 4) {
-        md5blks[i >> 2] = s.charCodeAt(i) + (s.charCodeAt(i + 1) << 8) + (s.charCodeAt(i + 2) << 16) + (s.charCodeAt(i + 3) << 24);
-      }
-      return md5blks;
-    }
-
-    function rhex(n) {
-      let s = '', j = 0;
-      for (; j < 4; j++) {
-        s += hex_chr[(n >> (j * 8 + 4)) & 0x0F] + hex_chr[(n >> (j * 8)) & 0x0F];
-      }
-      return s;
-    }
-
-    function hex(x) {
-      for (let i = 0; i < x.length; i++) x[i] = rhex(x[i]);
-      return x.join('');
-    }
-
-    const hex_chr = '0123456789abcdef'.split('');
-    return hex(md51(str));
+    return hash.toString(36);
   }
 
   let precomputedVectorIndex = null;
@@ -729,7 +594,7 @@
     if (!defText || !precomputedStore || !precomputedStore.index || !precomputedStore.buffer) return null;
     const str = String(defText).trim();
     const cleanDef = str.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const key = md5(cleanDef);
+    const key = hashString(cleanDef);
     const meta = precomputedStore.index[key];
     if (meta && typeof meta.offset === 'number' && typeof meta.length === 'number') {
       return new Int8Array(precomputedStore.buffer, meta.offset, meta.length);
@@ -740,11 +605,14 @@
   function dotProductInt8(vecF32, vecInt8) {
     if (!vecF32 || !vecInt8 || vecF32.length !== vecInt8.length) return 0;
     let dot = 0;
+    let normB = 0;
     const len = vecF32.length;
     for (let i = 0; i < len; i++) {
-      dot += vecF32[i] * (vecInt8[i] / 127.0);
+      const v = vecInt8[i] / 127.0;
+      dot += vecF32[i] * v;
+      normB += v * v;
     }
-    return dot;
+    return normB > 0 ? dot / Math.sqrt(normB) : dot;
   }
 
   function dotProduct(vecA, vecB) {
@@ -879,48 +747,71 @@
     return map;
   }
 
-  function calibrateDefinitionConfidenceScores(rawSims) {
-    if (!Array.isArray(rawSims) || rawSims.length === 0) return { bestDefIndex: 0, highestSim: 0, defConfidenceScores: [] };
+  function cleanDefinitionForEmbedding(text) {
+    if (!text || typeof text !== 'string') return '';
+    return text
+      .replace(/<r[tp][^>]*>.*?<\/r[tp]>/gi, '') // Strip ruby reading annotations
+      .replace(/<[^>]*>/g, '') // Strip HTML tags
+      .replace(/\s*(Sentence|Grammar|Pattern|文型)\s*:.*$/gi, '') // Strip trailing grammar pattern lines
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function formatSensePassage(entry, defText) {
+    const cleanDef = cleanDefinitionForEmbedding(defText);
+    return `passage: ${cleanDef}`;
+  }
+
+  /**
+   * Calibrates raw cosine similarities using Temperature-Scaled Softmax (tau = 0.06)
+   * and scales them into human-readable confidence scores (52% - 95%).
+   */
+  function calibrateDefinitionConfidenceScores(rawSims, temperature = 0.06) {
+    if (!Array.isArray(rawSims) || rawSims.length === 0) {
+      return { bestDefIndex: 0, highestSim: 0, defConfidenceScores: [] };
+    }
+
     if (rawSims.length === 1) {
       const sim = rawSims[0];
-      const percent = Math.min(95, Math.max(65, Math.round(60 + Math.max(0, sim) * 100)));
+      const quality = Math.min(1.0, Math.max(0.0, (sim - 0.12) / 0.28));
+      const percent = Math.round(68 + quality * 26);
       return { bestDefIndex: 0, highestSim: sim, defConfidenceScores: [`${percent}%`] };
     }
 
-    let highestSim = -Infinity;
-    let secondSim = -Infinity;
+    let maxSim = -Infinity;
     let bestDefIndex = 0;
-
     for (let i = 0; i < rawSims.length; i++) {
-      const sim = rawSims[i];
-      if (sim > highestSim) {
-        secondSim = highestSim;
-        highestSim = sim;
+      if (rawSims[i] > maxSim) {
+        maxSim = rawSims[i];
         bestDefIndex = i;
-      } else if (sim > secondSim) {
-        secondSim = sim;
       }
     }
 
-    if (secondSim === -Infinity) secondSim = highestSim - 0.05;
+    // 1. Numerically stable Temperature-Scaled Softmax
+    const expSims = new Float64Array(rawSims.length);
+    let expSum = 0;
+    for (let i = 0; i < rawSims.length; i++) {
+      const expVal = Math.exp((rawSims[i] - maxSim) / temperature);
+      expSims[i] = expVal;
+      expSum += expVal;
+    }
 
-    const margin = Math.max(0, highestSim - secondSim);
-    
-    // Absolute similarity quality (typical E5 cosine range: 0.15 to 0.40)
-    const baseQuality = Math.min(1.0, Math.max(0.4, (highestSim - 0.10) / 0.25));
-    
-    // Top confidence scales from 75% to 95% depending on absolute similarity and margin
-    const topConfVal = Math.min(95, Math.max(72, Math.round(72 + baseQuality * 15 + Math.min(1.0, margin / 0.04) * 8)));
+    const probs = new Float64Array(rawSims.length);
+    for (let i = 0; i < rawSims.length; i++) {
+      probs[i] = expSum > 0 ? expSims[i] / expSum : 1 / rawSims.length;
+    }
 
+    // 2. Absolute quality factor based on top similarity (expected range: 0.15 - 0.42)
+    const qualityFactor = Math.min(1.0, Math.max(0.40, (maxSim - 0.10) / 0.26));
+
+    // 3. User-facing confidence mapping (52% floor, up to 95%)
     const defConfidenceScores = rawSims.map((sim, idx) => {
-      if (idx === bestDefIndex) return `${topConfVal}%`;
-      const gap = highestSim - sim;
-      const dropRatio = Math.min(1.0, gap / 0.05);
-      const conf = Math.max(52, Math.round(topConfVal - dropRatio * (topConfVal - 52)));
-      return `${conf}%`;
+      const p = probs[idx];
+      const confVal = Math.min(95, Math.max(52, Math.round(50 + 45 * p * qualityFactor)));
+      return `${confVal}%`;
     });
 
-    return { bestDefIndex, highestSim, defConfidenceScores };
+    return { bestDefIndex, highestSim: maxSim, defConfidenceScores };
   }
 
   function formatDefinitionText(rawDef) {
@@ -937,6 +828,22 @@
     const t = text.trim();
     if (/^(Sentence|Grammar|Pattern|文型)\s*:?/i.test(t)) return true;
     if (/^\d+[이가을를에에서과와도만으로로은는](?:\s|$)/i.test(t)) return true;
+    return false;
+  }
+
+  function isHeadwordOrAffixEcho(text, surfaceWord) {
+    if (!text || typeof text !== 'string') return false;
+    const t = text.trim();
+    if (!surfaceWord) {
+      return /^[-~—]?[가-힣]{1,4}[-~—]?$/.test(t);
+    }
+    const normSurface = surfaceWord.replace(/^[-~—]+|[-~—]+$/g, '').trim();
+    const cleanT = t.replace(/^[-~—]+|[-~—]+$/g, '').trim();
+    if (cleanT === normSurface || cleanT === surfaceWord) return true;
+    if (normSurface) {
+      const headwordRegex = new RegExp(`^[-~—]?${normSurface}(?:\\d+|\\s*\\([^)]*\\)|\\s*〔[^〕]*〕)?[-~—]?$`);
+      if (headwordRegex.test(t)) return true;
+    }
     return false;
   }
 
@@ -961,15 +868,20 @@
     const isDescriptionLine = (text) => {
       if (!text) return false;
       const t = text.trim();
-      return /^(To\s+[a-z]|Feeling\s+[a-z]|Having\s+[a-z]|Being\s+[a-z]|A\s+[a-z]|An\s+[a-z]|The\s+[a-z]|Conjugation|Conjugations)/i.test(t);
+      if (/^(To\s+|Feeling\s+|Having\s+|Being\s+|A\s+|An\s+|The\s+|Used\s+|Conjugation|Conjugations)/i.test(t)) return true;
+      if (/^\([^\)]*\)\s*(?:To\s+|A\s+|An\s+|The\s+|Being\s+|Feeling\s+|Used\s+)/i.test(t)) return true;
+      if (/^(人|物|こと|～|する|ある|いる|よう|状態|行為)/.test(t)) return true;
+      return false;
     };
 
     rawLines.forEach((line) => {
       let cleaned = line.trim();
       if (!cleaned) return;
 
-      const isStemOnly = surfaceWord && (cleaned === `${surfaceWord}-` || cleaned === `${surfaceWord} -` || cleaned === `${surfaceWord}–`);
-      if (isStemOnly) return;
+      // Skip stem/headword/affix echo lines (e.g. "-사", "사-", "사", "가다-")
+      if (isHeadwordOrAffixEcho(cleaned, surfaceWord)) {
+        return;
+      }
 
       const numberedMatch = cleaned.match(/^(\d{1,2})[\.\)]\s*(.*)/s);
       if (numberedMatch) {
@@ -1049,7 +961,8 @@
       });
 
       const tQStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      const queryEmbedding = await computeMultilingualEmbedding(`query: ${sentence}`, 64, enableWebGpuOverride);
+      const queryPrompt = `query: ${sentence}`;
+      const queryEmbedding = await computeMultilingualEmbedding(queryPrompt, 96, enableWebGpuOverride);
       const tQEnd = typeof performance !== 'undefined' ? performance.now() : Date.now();
       const queryMs = Number((tQEnd - tQStart).toFixed(2));
 
@@ -1096,9 +1009,7 @@
               precomputedHits++;
               continue;
             }
-            const str = String(defText).trim();
-            const cleanDef = str.replace(/<[^>]*>/g, '').replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim() || str;
-            const passageQuery = `passage: ${cleanDef}`;
+            const passageQuery = formatSensePassage(entry, defText);
             passageTextToCleanMap.set(defText, passageQuery);
             uncachedPassagesSet.add(passageQuery);
           }
@@ -1108,7 +1019,7 @@
       const uncachedList = Array.from(uncachedPassagesSet);
       const computedEmbeddingsMap = new Map();
       if (uncachedList.length > 0) {
-        const batchEmbeddings = await computeMultilingualEmbeddingsBatch(uncachedList, 64, enableWebGpuOverride);
+        const batchEmbeddings = await computeMultilingualEmbeddingsBatch(uncachedList, 96, enableWebGpuOverride);
         for (let i = 0; i < uncachedList.length; i++) {
           if (batchEmbeddings[i]) {
             computedEmbeddingsMap.set(uncachedList[i], batchEmbeddings[i]);
@@ -1265,9 +1176,7 @@
     cosineSimilarity,
     dotProduct,
     dotProductInt8,
-    getPrecomputedInt8Vector,
-    md5,
-    SEMANTIC_ASSOCIATIONS: []
+    getPrecomputedInt8Vector
   };
 
   if (typeof module !== 'undefined' && module.exports) {

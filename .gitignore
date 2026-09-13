@@ -1,33 +1,59 @@
 # Dependencies
 node_modules/
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+env/
+venv/
+.venv/
+scripts/__pycache__/
+scripts/*.vec.bin
+scripts/*.tmp
+
+# OS & Environment files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & Editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test & log files
+coverage/
+scratch/
+.vitest/
+.vite/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# OS / Editor junk
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-.vscode/
-.idea/
+# Extension packages & certificates
+*.crx
+*.zip
+*.pem
 
-# Testing & Coverage
-coverage/
-.vitest/
+# Environment & local secrets
+.env
+.env.local
+.env.*.local
 
-# Temp files & Python build artifacts / Large ONNX models (>100MB GitHub limit)
-*.log
-scratch/
-__pycache__/
-*.pyc
-*fp32.onnx
-lib/models/multilingual_e5_small_int8.onnx
-lib/models/vectors.bin
-lib/models/vector_index.json
-scripts/*_vectors.json
-scripts/*_vectors.bin
-scripts/*_vectors.vec.bin
+# Build output
+dist/
+build/
+
+# Tooling & vector cache files
+.system_generated/
 *.vec.bin
+.turbo/
+*.tsbuildinfo
 
-
+# Large neural model weights (download via GitHub Releases or export script)
+lib/models/*.onnx
+*.onnx

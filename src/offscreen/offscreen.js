@@ -1,92 +1,28 @@
-import initGaruWasm, { GaruWasm } from '../../lib/garu/garu_wasm.js';
+/**
+ * Munmek Offscreen Document Controller
+ * Hosts Kiwi WASM Morphological Analyzer and Multilingual E5 ONNX Sense Reranker.
+ */
 
-let garuInstance = null;
-let isInitializing = false;
-
-async function initGaru() {
-  if (garuInstance) return garuInstance;
-  if (isInitializing) {
-    while (!garuInstance) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    return garuInstance;
-  }
-
-  isInitializing = true;
+async function handleOffscreenAnalyzeKorean(request, sendResponse) {
   try {
-    const wasmUrl = chrome.runtime.getURL('lib/garu/garu_wasm_bg.wasm');
-    const modelUrl = chrome.runtime.getURL('lib/garu/base.gmdl');
+    const text = request.text || '';
+    const targetWord = request.targetWord || request.word || text;
 
-    const [wasmRes, modelRes] = await Promise.all([
-      fetch(wasmUrl),
-      fetch(modelUrl)
-    ]);
-
-    if (!wasmRes.ok || !modelRes.ok) {
-      throw new Error(`Failed to fetch Garu assets: WASM HTTP ${wasmRes.status}, Model HTTP ${modelRes.status}`);
+    if (typeof globalThis.KiwiBridge !== 'undefined' && globalThis.KiwiBridge.initKiwiEngine) {
+      const kiwi = await globalThis.KiwiBridge.initKiwiEngine();
+      const candidates = globalThis.KiwiBridge.analyzeWithKiwi(kiwi, text, targetWord);
+      const tokens = kiwi.tokenize(text) || [];
+      sendResponse({ ok: true, engine: 'kiwi', tokens, candidates });
+      return;
     }
 
-    const wasmBytes = await wasmRes.arrayBuffer();
-    const modelBytes = new Uint8Array(await modelRes.arrayBuffer());
-
-    await initGaruWasm(wasmBytes);
-    garuInstance = new GaruWasm(modelBytes, false);
-    console.log('[Munmek Offscreen] Garu-ko WASM morphological analyzer initialized successfully.');
-    return garuInstance;
+    throw new Error('Kiwi WASM engine not available');
   } catch (err) {
-    console.error('[Munmek Offscreen] Garu-ko WASM initialization error:', err);
-    isInitializing = false;
-    throw err;
+    console.error('[Munmek Offscreen] Kiwi analysis error:', err);
+    sendResponse({ ok: false, error: err.message });
   }
 }
-
-function mapPosToCategory(pos) {
-  if (!pos) return 'other';
-  if (pos === 'VV' || pos === 'VX' || pos === 'XSV') return 'verb';
-  if (pos === 'VA' || pos === 'XSA') return 'adjective';
-  if (pos === 'NNG' || pos === 'NNP' || pos === 'NNB' || pos === 'NP') return 'noun';
-  if (pos === 'MAG' || pos === 'MAJ') return 'adverb';
-  if (pos.startsWith('JK') || pos === 'JX' || pos === 'JC') return 'particle';
-  return 'other';
-}
-
-function deriveCandidatesFromTokens(tokens) {
-  const candidates = [];
-  const addCand = (text, reason, score, posHint) => {
-    if (!text || text.length < 1) return;
-    if (!candidates.some((c) => c.text === text)) {
-      candidates.push({ text, reason, score, posHint });
-    }
-  };
-
-  for (const token of tokens) {
-    const text = token.text;
-    const pos = token.pos;
-    const cat = mapPosToCategory(pos);
-
-    if (cat === 'verb' || cat === 'adjective') {
-      const baseForm = text.endsWith('다') ? text : text + '다';
-      addCand(baseForm, `Garu WASM ${pos} stem (${text} -> ${baseForm})`, 95, cat);
-
-      if (text.endsWith('들')) {
-        const digeutForm = text.slice(0, -1) + '듣다';
-        addCand(digeutForm, `Garu WASM ㄷ-irregular (${text} -> ${digeutForm})`, 94, cat);
-      }
-      if (text.endsWith('걸')) {
-        const digeutForm = text.slice(0, -1) + '걷다';
-        addCand(digeutForm, `Garu WASM ㄷ-irregular (${text} -> ${digeutForm})`, 94, cat);
-      }
-      if (text.endsWith('물')) {
-        const digeutForm = text.slice(0, -1) + '묻다';
-        addCand(digeutForm, `Garu WASM ㄷ-irregular (${text} -> ${digeutForm})`, 94, cat);
-      }
-    } else if (cat === 'noun') {
-      addCand(text, `Garu WASM noun (${text})`, 92, 'noun');
-    }
-  }
-
-  return candidates;
-}
+globalThis.handleOffscreenAnalyzeKorean = handleOffscreenAnalyzeKorean;
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'PING_OFFSCREEN') {
@@ -94,36 +30,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-async function handleOffscreenAnalyzeKorean(request, sendResponse) {
-  try {
-    const engine = await initGaru();
-    const rawResult = engine.analyze(request.text || '');
-    const tokens = Array.isArray(rawResult?.tokens) ? rawResult.tokens : (Array.isArray(rawResult) ? rawResult : []);
-    let candidates = deriveCandidatesFromTokens(tokens);
-    if (typeof globalThis.OnnxReranker !== 'undefined' && globalThis.OnnxReranker.rerankCandidates) {
-      candidates = globalThis.OnnxReranker.rerankCandidates(candidates, request.text || '');
-    }
-    sendResponse({ ok: true, tokens, candidates });
-  } catch (err) {
-    sendResponse({ ok: false, error: err.message });
+  if (request.type === 'OFFSCREEN_ANALYZE_KOREAN' || request.type === 'analyzeKoreanTextWasm' || request.type === 'OFFSCREEN_ANALYZE_KOREAN_KIWI') {
+    handleOffscreenAnalyzeKorean(request, sendResponse);
+    return true;
   }
-}
-globalThis.handleOffscreenAnalyzeKorean = handleOffscreenAnalyzeKorean;
 
   if (request.type === 'OFFSCREEN_RERANK_CANDIDATES') {
-    (async () => {
-      try {
-        let reranked = request.candidates || [];
-        if (typeof globalThis.OnnxReranker !== 'undefined' && globalThis.OnnxReranker.rerankCandidatesAsync) {
-          reranked = await globalThis.OnnxReranker.rerankCandidatesAsync(reranked, request.sentenceContext || '');
-        } else if (typeof globalThis.OnnxReranker !== 'undefined' && globalThis.OnnxReranker.rerankCandidates) {
-          reranked = globalThis.OnnxReranker.rerankCandidates(reranked, request.sentenceContext || '');
-        }
-        sendResponse({ ok: true, candidates: reranked });
-      } catch (err) {
-        sendResponse({ ok: false, error: err.message });
-      }
-    })();
+    // Kiwi already performs candidate disambiguation statistically; return candidates directly
+    sendResponse({ ok: true, candidates: request.candidates || [] });
     return true;
   }
 
@@ -161,5 +75,9 @@ globalThis.handleOffscreenAnalyzeKorean = handleOffscreenAnalyzeKorean;
   }
 });
 
-// Pre-initialize WASM engine when offscreen document is opened
-initGaru().catch((err) => console.warn('[Munmek Offscreen] Pre-init notice:', err));
+// Pre-initialize Kiwi WASM engine on startup
+if (typeof globalThis.KiwiBridge !== 'undefined' && globalThis.KiwiBridge.initKiwiEngine) {
+  globalThis.KiwiBridge.initKiwiEngine()
+    .then(() => console.log('[Munmek Offscreen] Kiwi WASM engine pre-initialized successfully.'))
+    .catch((err) => console.warn('[Munmek Offscreen] Kiwi pre-init notice:', err));
+}

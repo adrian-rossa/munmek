@@ -37,10 +37,23 @@ def clean_def_text(def_text: str) -> str:
     cleaned = re.sub(r'\s+', ' ', cleaned).strip().lower()
     return cleaned
 
+def to_base36(num: int) -> str:
+    chars = '0123456789abcdefghijklmnopqrstuvwxyz'
+    if num == 0:
+        return '0'
+    res = []
+    while num > 0:
+        num, rem = divmod(num, 36)
+        res.append(chars[rem])
+    return ''.join(reversed(res))
+
 def hash_def_text(def_text: str) -> str:
-    """Generate deterministic MD5 hex string for clean definition text."""
+    """Generate deterministic DJB2 hash matching JS hashString."""
     clean = clean_def_text(def_text)
-    return hashlib.md5(clean.encode('utf-8')).hexdigest()
+    h = 5381
+    for ch in clean:
+        h = (((h << 5) + h) + ord(ch)) & 0x7fffffff
+    return to_base36(h)
 
 def mean_pooling(model_output, attention_mask):
     token_embeddings = model_output[0] # First element of model_output contains all token embeddings
@@ -63,7 +76,7 @@ def compute_definition_embeddings_onnx(definitions, session, tokenizer, batch_si
         batch_text = formatted_passages[i:i + batch_size]
         batch_defs = definitions[i:i + batch_size]
         
-        encoded = tokenizer(batch_text, padding=True, truncation=True, max_length=64, return_tensors='np')
+        encoded = tokenizer(batch_text, padding=True, truncation=True, max_length=96, return_tensors='np')
         input_ids = encoded['input_ids'].astype(np.int64)
         attention_mask = encoded['attention_mask'].astype(np.int64)
 
@@ -109,7 +122,7 @@ def compute_definition_embeddings(definitions, model, tokenizer, device='cpu', b
         batch_text = formatted_passages[i:i + batch_size]
         batch_defs = definitions[i:i + batch_size]
         
-        encoded = tokenizer(batch_text, padding=True, truncation=True, max_length=64, return_tensors='pt').to(device)
+        encoded = tokenizer(batch_text, padding=True, truncation=True, max_length=96, return_tensors='pt').to(device)
         with torch.no_grad():
             outputs = model(**encoded)
             embeddings = mean_pooling(outputs, encoded['attention_mask'])
