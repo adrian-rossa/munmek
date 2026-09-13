@@ -145,7 +145,7 @@ Right-click the Munmek toolbar icon and select **Options** (or open `src/options
 3. **AnkiConnect Setup**:
    - Ensure Anki is open with AnkiConnect enabled.
    - Click **Test Connection**, choose your target **Deck** and **Note Type**, and map Munmek placeholders to your note fields.
-4. **Developer Mode & Optional Features (Stage 2 ONNX Reranking)**:
+4. OPTIONAL: **Developer Mode & Optional Features (Stage 2 ONNX Reranking)**:
    - In Munmek Settings, check **Enable Developer Mode (Experimental Features)**.
    - If you wish to use the optional Stage 2 Multilingual E5 ONNX neural sense reranker:
      - Download `multilingual_e5_small_int8.onnx` from [GitHub Releases](https://github.com/adrian-rossa/munmek/releases) into `lib/models/`.
