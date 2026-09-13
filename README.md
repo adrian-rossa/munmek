@@ -1,3 +1,5 @@
+<img width="1824" height="1175" alt="whale_haEbZEHlhn-ezgif com-optimize" src="https://github.com/user-attachments/assets/8bd7b619-2fe2-4fec-a287-7985a6669b4c" />
+
 # Munmek (문맥) — Korean Context Lookup
 
 **Munmek** is a Chromium browser extension for fast, context-aware Korean word lookups. It solves the language ambiguity and complex conjugations that make Korean difficult for learners. By combining a local offline termbank engine (supporting Yomitan / KRDICT imports), the native C++ **Kiwi** WebAssembly morphological analyzer, neural KoELECTRA candidate reranking, and an optional Multilingual E5 cross-lingual sense disambiguation model, Munmek provides instant, accurate dictionary headwords and definitions. It also features automated video subtitle extraction (Netflix, YouTube, ASBPlayer), adaptive multilingual LLM explanations, and 1-click AnkiConnect flashcard exports.
@@ -6,56 +8,6 @@
 > In its current vibe-coded state, this extension serves as a **proof of concept**. It is actively developed to explore high-performance offline Korean NLP in the browser.
 > If you are looking for mature commercial tools, [Kimchi Reader](https://kimchi-reader.app/) and [Migaku](https://migaku.com/) are polished alternatives.
 > Credits for the inspiring [blog post](https://kimchi-reader.app/blog/int8-cpu-korean-disambiguation) regarding the KoELECTRA INT8 Reranker go to Kimchi Reader's developer @Alanoor.
-
----
-
-## How It Works: An Example Workflow (`부르고`)
-
-To see how Munmek turns complex conjugated text into instant definitions, consider hovering over the word **`부르고`** in the subtitle sentence:
-
-> **"아이들이 신나게 노래를 부르고 있다."** *(The children are joyfully singing a song.)*
-
-```mermaid
-flowchart TD
-    A["Hover '부르고' in Subtitle/Page"] --> B["Step 1: Kiwi WASM Engine (<2 ms)"]
-    B -->|"Morphemes: 부르/VV + 고/EC"| C["Lemma: 부르다"]
-    C --> D["Step 2: Dictionary Candidate Aggregation"]
-    D --> E["Sense 1: to call / name<br/>Sense 2: to sing<br/>Sense 3: to be full (stomach)"]
-    E --> F["Step 3: Neural Stem Disambiguation (KoELECTRA)"]
-    F --> G["Step 4: Semantic Sense Reranking (Multilingual E5 - Optional/Experimental)"]
-    G -->|"Cosine Match: 84% on 'to sing'"| H["Preselects Def 2 ('to sing') & ✨ LLM Matched"]
-    H --> I["Step 5: Contextual LLM Breakdown (Optional)"]
-    H --> J["Step 6: 1-Click Anki Flashcard Export"]
-```
-
-1. **Step 1: Morphological Deinflection & Segmentation (Kiwi WASM Engine — <2 ms)**
-   - The native C++ Kiwi engine runs offline in a WebAssembly sandbox inside a Chrome Offscreen Document.
-   - It segments the surface token into its constituent morphemes: `부르` (Verb Stem `VV`) + `고` (Connective Suffix `EC`).
-   - Recognizing irregular inflection patterns (e.g., 르-irregularity), Kiwi recovers the dictionary citation form (canonical headword): **`부르다`**.
-   - Concurrently, Kiwi checks for compound verbs, auxiliary predicates, particle attachments, and copulas.
-
-2. **Step 2: Candidate Extraction & Dictionary Aggregation**
-   - Munmek queries your local IndexedDB termbanks (e.g. KRDICT English, KRDICT Japanese).
-   - It retrieves all matching homonym entries and definition senses:
-     - **Entry 1**: `부르다` (Verb: *to call someone*, *to name*)
-     - **Entry 2**: `부르다` (Verb: *to sing [a song]*)
-     - **Entry 3**: `부르다` (Adjective: *to be full [stomach]*)
-
-3. **Step 3: Neural Stem Disambiguation (Stage 1 — KoELECTRA INT8)**
-   - A lightweight INT8 ONNX KoELECTRA model (~14.3 MB) analyzes the Korean sentence context to rank candidate stems and confirm part of speech. This ensures surface forms with identical spellings or ambiguous stems (e.g. `듣다` vs `들다` for `들어요`, or `짓다` vs `지다` for `지어요`) are prioritized correctly.
-
-4. **Step 4: Semantic Sense Reranking & Badge Matching (Stage 2 — Multilingual E5, Optional / Experimental)**
-   - When enabled, the cross-lingual bi-encoder Multilingual E5 model (~118 MB) encodes the full sentence context alongside dictionary definition glosses in English, Japanese, or other languages.
-   - It computes cross-lingual semantic similarity (accelerated via WebGPU when available).
-   - It identifies **Sense 2 ("to sing")** as the winning semantic match (e.g. 84% confidence), automatically highlights and pre-selects that definition tab, and attaches the `✨ Matched` badge.
-
-5. **Step 5: Contextual LLM Deep-Dive (Optional)**
-   - Click **"✨ Ask LLM"** inside the tooltip.
-   - Munmek automatically queries your configured AI (Local LLM or Gemini) in the language of the active dictionary tab (e.g. English for `KRDICT EN`, Japanese for `KRDICT JA`).
-   - The LLM delivers scene-grounded nuance, honorific levels, and custom requested prompt fields (e.g. `cultural_context` or `hanja_breakdown`).
-
-6. **Step 6: 1-Click Flashcard Export (AnkiConnect)**
-   - Click **"Send to Anki"** to create a flashcard in Anki Desktop with word audio, sentence context, selected definition, and custom LLM fields, accompanied by instant toast confirmation.
 
 ---
 
@@ -188,6 +140,56 @@ Precomputing definition vectors locally using your GPU accelerates Stage 2 sense
 - **Export Flashcard**: Click **"Send to Anki"** or `+ Anki` on any specific definition to export a card. 
    Optionally update the last created card with a screenshot and audio using the asbplayer browser extension (Select "Update last card" Option in asbplayer settings under mining -> Mining button default action).
 - **End Session**: Click **"⏹ Stop"** in the popup to disable lookups on the active tab or close the tab.
+
+---
+
+## How It Works: An Example Workflow (`부르고`)
+
+To see how Munmek turns complex conjugated text into instant definitions, consider hovering over the word **`부르고`** in the subtitle sentence:
+
+> **"아이들이 신나게 노래를 부르고 있다."** *(The children are joyfully singing a song.)*
+
+```mermaid
+flowchart TD
+    A["Hover '부르고' in Subtitle/Page"] --> B["Step 1: Kiwi WASM Engine (<2 ms)"]
+    B -->|"Morphemes: 부르/VV + 고/EC"| C["Lemma: 부르다"]
+    C --> D["Step 2: Dictionary Candidate Aggregation"]
+    D --> E["Sense 1: to call / name<br/>Sense 2: to sing<br/>Sense 3: to be full (stomach)"]
+    E --> F["Step 3: Neural Stem Disambiguation (KoELECTRA)"]
+    F --> G["Step 4: Semantic Sense Reranking (Multilingual E5 - Optional/Experimental)"]
+    G -->|"Cosine Match: 84% on 'to sing'"| H["Preselects Def 2 ('to sing') & ✨ LLM Matched"]
+    H --> I["Step 5: Contextual LLM Breakdown (Optional)"]
+    H --> J["Step 6: 1-Click Anki Flashcard Export"]
+```
+
+1. **Step 1: Morphological Deinflection & Segmentation (Kiwi WASM Engine — <2 ms)**
+   - The native C++ Kiwi engine runs offline in a WebAssembly sandbox inside a Chrome Offscreen Document.
+   - It segments the surface token into its constituent morphemes: `부르` (Verb Stem `VV`) + `고` (Connective Suffix `EC`).
+   - Recognizing irregular inflection patterns (e.g., 르-irregularity), Kiwi recovers the dictionary citation form (canonical headword): **`부르다`**.
+   - Concurrently, Kiwi checks for compound verbs, auxiliary predicates, particle attachments, and copulas.
+
+2. **Step 2: Candidate Extraction & Dictionary Aggregation**
+   - Munmek queries your local IndexedDB termbanks (e.g. KRDICT English, KRDICT Japanese).
+   - It retrieves all matching homonym entries and definition senses:
+     - **Entry 1**: `부르다` (Verb: *to call someone*, *to name*)
+     - **Entry 2**: `부르다` (Verb: *to sing [a song]*)
+     - **Entry 3**: `부르다` (Adjective: *to be full [stomach]*)
+
+3. **Step 3: Neural Stem Disambiguation (Stage 1 — KoELECTRA INT8)**
+   - A lightweight INT8 ONNX KoELECTRA model (~14.3 MB) analyzes the Korean sentence context to rank candidate stems and confirm part of speech. This ensures surface forms with identical spellings or ambiguous stems (e.g. `듣다` vs `들다` for `들어요`, or `짓다` vs `지다` for `지어요`) are prioritized correctly.
+
+4. **Step 4: Semantic Sense Reranking & Badge Matching (Stage 2 — Multilingual E5, Optional / Experimental)**
+   - When enabled, the cross-lingual bi-encoder Multilingual E5 model (~118 MB) encodes the full sentence context alongside dictionary definition glosses in English, Japanese, or other languages.
+   - It computes cross-lingual semantic similarity (accelerated via WebGPU when available).
+   - It identifies **Sense 2 ("to sing")** as the winning semantic match (e.g. 84% confidence), automatically highlights and pre-selects that definition tab, and attaches the `✨ Matched` badge.
+
+5. **Step 5: Contextual LLM Deep-Dive (Optional)**
+   - Click **"✨ Ask LLM"** inside the tooltip.
+   - Munmek automatically queries your configured AI (Local LLM or Gemini) in the language of the active dictionary tab (e.g. English for `KRDICT EN`, Japanese for `KRDICT JA`).
+   - The LLM delivers scene-grounded nuance, honorific levels, and custom requested prompt fields (e.g. `cultural_context` or `hanja_breakdown`).
+
+6. **Step 6: 1-Click Flashcard Export (AnkiConnect)**
+   - Click **"Send to Anki"** to create a flashcard in Anki Desktop with word audio, sentence context, selected definition, and custom LLM fields, accompanied by instant toast confirmation.
 
 ---
 
