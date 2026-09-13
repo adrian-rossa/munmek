@@ -99,10 +99,12 @@
    ```bash
    git clone https://github.com/adrian-rossa/munmek.git
    ```
-2. Open Chrome and navigate to `chrome://extensions/`.
-3. Enable **Developer mode** using the toggle in the top-right corner.
-4. Click **Load unpacked** and select the root directory of the `munmek` project.
-5. Pin the **Munmek** icon in your browser toolbar.
+   or
+   Click the green <>Code Button at the top and select "Download ZIP". Extract that ZIP to a location of your liking.
+3. Open Chrome and navigate to `chrome://extensions/`.
+4. Enable **Developer mode** using the toggle in the top-right corner.
+5. Click **Load unpacked** and select the root directory/unpacked folder of the `munmek` project.
+6. Pin the **Munmek** icon in your browser toolbar.
 
 ### 3. Extension Configuration
 Right-click the Munmek toolbar icon and select **Options** (or open `src/options/options.html`):
