@@ -23,6 +23,9 @@ desktop.ini
 .vscode/
 *.swp
 *.swo
+.gemini/
+.antigravity/
+.claude/
 
 # Test & log files
 coverage/

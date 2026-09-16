@@ -47,7 +47,7 @@
   - Automatically synthesizes multi-part compound predicates (`데려다` + `주다` $\rightarrow$ `데려다주다`, `빠져` + `나가다` $\rightarrow$ `빠져나가다`).
   - Decomposes single-token compound verbs (`날아오르다` $\rightarrow$ `날다`, `오르다`) and presents constituent verbs in a dedicated `[관련]` sub-row.
 - **Colloquial Copula Resolution**: Recovers base forms from contracted copular expressions (`말이야` $\rightarrow$ `말이다`, `거예요` $\rightarrow$ `것이다`).
-- **Compound Noun Preservation**: Identifies compound nouns (`조타수`, `감시탑`, `조명탄`) while simultaneously providing root nouns (`감시`, `탑`) as selectable chips.
+- **Compound Noun Preservation & Linked Candidate Pills**: Identifies compound nouns (`조타수`, `감시탑`, `조명탄`) while simultaneously providing root nouns (`감시`, `탑`) as selectable chips. When a target word is composed of multiple valid candidates (e.g. `어디다` = `어디` + `다`), Munmek visually groups them in linked candidate pills (`[ 🧩 part1 + part2 ]`) directly in the candidate chips row.
 - **Pure-JS Layered De-Stacker Fallback**: Modular Hangul Jamo math (초성/중성/종성) providing fallback particle stripping, modal peeling (`-겠-`, `-았/었-`, `-시/셨-`), and connective ending deconjugations.
 
 ### 🧠 Neural Disambiguation & Semantic Reranking (Optional / Developer Mode)
@@ -116,6 +116,8 @@ Right-click the Munmek toolbar icon and select **Options** (or open `src/options
 2. **AI Backend Setup**:
    - Select **Custom OpenAI-Compatible Endpoint** (default: `http://localhost:1234/v1`) or **Google Gemini**.
    - Enter your model ID and API key (if required), then click **Test AI Connection**.
+   - Customize the linguistic system prompt or click **Reset to Default Settings** to revert to default prompts and options anytime.
+   - Robust prompt anchoring with candidate review framing ensures lightweight local LLMs (e.g. Gemma 2B) accurately analyze the target sentence word without hallucinating or force-fitting sub-slices.
 3. **AnkiConnect Setup**:
    - Ensure Anki is open with AnkiConnect enabled.
    - Click **Test Connection**, choose your target **Deck** and **Note Type**, and map Munmek placeholders to your note fields.
@@ -258,7 +260,7 @@ munmek/
 │   ├── models/                # KoELECTRA INT8 ONNX, Multilingual E5 INT8 ONNX & vocab
 │   ├── onnx/                  # ONNXRuntime-Web engine & WordPiece tokenizer
 │   └── jszip.min.js           # ZIP extraction library for termbank imports
-└── test/                      # Vitest automated test suite (174 passing unit tests across 16 files)
+└── test/                      # Vitest automated test suite (194 passing unit tests across 17 files)
 ```
 
 ---
@@ -281,6 +283,7 @@ The test suite covers:
 - **Tooltip DOM Engine**: Single adaptive Ask/Refresh button, multi-dictionary language routing, ruby furigana rendering, HTML entity decoding, and Anki feedback (`test/content_ui.test.js`).
 - **IndexedDB Termbanks**: Multi-dictionary priority queries and vector caching (`test/dictionary_db.test.js`).
 - **Neural Disambiguation**: Stage 1 KoELECTRA candidate ranking and Stage 2 Multilingual E5 sense reranking (`test/koelectra_reranker.test.js`, `test/two_stage_neural_pipeline.test.js`, `test/synthetic_nlp_eval.test.js`).
+- **Ask LLM & Candidate Disambiguation**: False slice hallucination defense, small LLM prompt anchoring, compound word pair detection, and linked candidate pill rendering (`test/ask_llm_fixes.test.js`).
 - **Netflix & TMDB Context**: Direct synopsis extraction, TMDB search fallbacks, and anti-cache pollution safeguards (`test/netflix_tmdb.test.js`, `test/site_context_and_session.test.js`).
 - **AI & AnkiConnect**: JSON schema parsing, dynamic custom prompt fields, and note template rendering (`test/custom_endpoint.test.js`, `test/custom_fields.test.js`, `test/background_template.test.js`).
 

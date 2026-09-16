@@ -16,7 +16,7 @@ const DEFAULT_MODEL_ID = 'gemini-flash-lite-latest';
 const DEFAULT_PROMPT = `Return ONLY valid JSON (no markdown backticks or commentary).
 
 Analyze the Korean word '{WORD}' in sentence: '{SENTENCE}'
-Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENCE2}'
+Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENCE2}'{CANDIDATE_LINE}
 
 Rules:
 1. If '{WORD}' is a person's name or proper noun in context (e.g. before ~이에요/~예요/~야/~아/~씨/~님), set "pos": "proper noun" and definition to the name rather than forcing a dictionary homonym.
@@ -32,6 +32,14 @@ Return JSON with "words_analysis": [{
   "grammar_notes": "contextual breakdown based on scene/sentence context",
   "id": "1"
 }]`;
+
+const DEFAULT_AI_PROMPT_EXTENSION = `You are an expert Korean linguistic assistant. Explain the target word and sentence using simple building-block logic.
+
+Rules:
+1. Break grammar down like simple math: [Word] + [Ending/Particle] = [Function/Meaning].
+2. Avoid complex linguistic terms. Use simple labels that explain the function and real meaning of the building blocks (e.g., "Topic Marker", "Direction Marker", "Connector").
+3. Explain ONLY the meaning relevant to the given sentence context. Make sure to use the context if it helps explaining.
+4. Keep bullets short and concise and avoid dense Western grammar jargon. Explain the language logically on its own terms.`;
 
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalled) {
   chrome.runtime.onInstalled.addListener(() => {
@@ -49,13 +57,15 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalle
       'customMinP',
       'customRepeatPenalty',
       'customPresencePenalty',
+      'aiPromptExtension',
       'ankiConnectUrl',
       'ankiDeckName',
       'ankiNoteType',
       'ankiFieldMapping',
       'ankiDefinitionField',
       'enableOnnxReranker',
-      'enableWebGpu'
+      'enableWebGpu',
+      'customAiFields'
     ], (result) => {
       const defaults = {};
       if (!result.aiProvider) defaults.aiProvider = 'custom';
@@ -83,6 +93,8 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalle
         }, null, 2);
       }
       if (!result.ankiDefinitionField) defaults.ankiDefinitionField = 'Back';
+      if (!Array.isArray(result.customAiFields)) defaults.customAiFields = [];
+      if (result.aiPromptExtension === undefined) defaults.aiPromptExtension = DEFAULT_AI_PROMPT_EXTENSION;
       if (Object.keys(defaults).length > 0) chrome.storage.local.set(defaults);
     });
   });
@@ -651,7 +663,8 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
     'customMinP',
     'customRepeatPenalty',
     'customPresencePenalty',
-    'aiPromptExtension'
+    'aiPromptExtension',
+    'customAiFields'
   ], async (config) => {
     try {
       const provider = config.aiProvider || 'gemini';
@@ -667,12 +680,20 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
       const tabId = sender && sender.tab ? sender.tab.id : (data && data.tabId ? data.tabId : null);
       const activeCtx = tabId ? activeTabContexts[tabId] : null;
 
+      const word = String(data.word || '').trim();
+      const candidate = (typeof data.candidate === 'string' ? data.candidate : (data.candidate?.text || '')).trim();
+      let candidateLine = '';
+      if (candidate && candidate !== word) {
+        candidateLine = `\nCandidate Under Review: '${candidate}' (Verify if '${candidate}' is a true constituent of '${word}'. If it is a spurious or false slice that does not match '${word}', disregard it and analyze the correct base form of '${word}').`;
+      }
+
       let systemInstruction = 'You are a precise Korean language assistant.';
       let promptText = DEFAULT_PROMPT
-        .replace('{WORD}', data.word || '')
+        .replace(/{WORD}/g, word)
         .replace('{SENTENCE}', data.sentence || '')
         .replace('{PREV_SENTENCE}', data.prevSentence || '')
-        .replace('{PREV_SENTENCE2}', data.prevSentence2 || '');
+        .replace('{PREV_SENTENCE2}', data.prevSentence2 || '')
+        .replace('{CANDIDATE_LINE}', candidateLine);
 
       let targetLangStr = 'English';
       if (data && data.responseLanguage && typeof data.responseLanguage === 'string' && data.responseLanguage.trim()) {
@@ -688,37 +709,31 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
         systemInstruction += ` Active Media/Scene Context (${activeCtx.name || activeCtx.title || 'Tab'}): ${ctxSummary}`;
       }
 
+      if (Array.isArray(config.customAiFields) && config.customAiFields.length > 0) {
+        const validFields = config.customAiFields
+          .map(f => ({
+            key: String(f?.key || '').trim().replace(/[^a-zA-Z0-9_]/g, ''),
+            description: String(f?.description || '').trim()
+          }))
+          .filter(f => f.key.length > 0);
+
+        if (validFields.length > 0) {
+          const customFieldsJson = validFields.map(f => {
+            const desc = f.description || '...';
+            return `"${f.key}": "${desc.replace(/"/g, '\\"')}"`;
+          }).join(',\n  ');
+
+          promptText = promptText.replace(
+            /"id":\s*"1"\s*\r?\n\s*\}\]/,
+            `"id": "1",\n  ${customFieldsJson}\n}]`
+          );
+        }
+      }
+
       if (config.aiPromptExtension && config.aiPromptExtension.trim()) {
         const ext = config.aiPromptExtension.trim();
         systemInstruction += ` Additional user instruction: ${ext}`;
-
-        const reservedWords = new Set([
-          'and', 'the', 'for', 'with', 'from', 'words', 'analysis', 'rules',
-          'words_analysis', 'pos', 'surface', 'base', 'definitions', 'grammar_notes',
-          'conjugation', 'sentence', 'context', 'korean', 'return', 'only', 'valid', 'json',
-          'string', 'array', 'object', 'number', 'boolean', 'field', 'fields', 'value', 'values',
-          'custom', 'extra', 'additional', 'following', 'containing', 'translation', 'definition'
-        ]);
-
-        const customFieldMatches = [
-          ...ext.matchAll(/[\("'`]\s*([a-zA-Z0-9_]{3,40})\s*[\)"'`]/g),
-          ...ext.matchAll(/\{\{([a-zA-Z0-9_]{3,40})\}\}/g),
-          ...ext.matchAll(/["'`]?([a-zA-Z0-9_]{3,40})["'`]?\s*:/g),
-          ...ext.matchAll(/(?:field|key|named)\s+(?:for\s+|of\s+|a\s+|an\s+)?["'`]?([a-zA-Z0-9_]{3,40})["'`]?/gi),
-          ...ext.matchAll(/["'`(]?([a-zA-Z0-9_]{3,40})["'`)']?\s+(?:field|key)\b/gi),
-          ...ext.matchAll(/\b([a-z][a-z0-9_]{2,30}_(?:translation|def|definition|meaning|field|note|nuance|romaji|reading|kana|kanji))\b/gi)
-        ]
-          .map(m => m[1])
-          .filter(k => !reservedWords.has(k.toLowerCase()))
-          .filter(k => k.includes('_') || /^[a-z]+[A-Z]/.test(k) || ['nuance', 'reading', 'hanja', 'synopsis', 'etymology', 'pitch', 'romaji'].includes(k.toLowerCase()));
-
-        const allCustomKeys = Array.from(new Set(customFieldMatches));
-        if (allCustomKeys.length > 0) {
-          systemInstruction += ` You MUST include the following custom field(s) in each object of your "words_analysis" JSON array (or at the root of your JSON response): ${allCustomKeys.map(k => `"${k}"`).join(', ')}.`;
-          promptText += `\n\nUser Instruction: ${ext}\nRequired extra fields in each "words_analysis" item: ${allCustomKeys.map(k => `"${k}": "..."`).join(', ')}`;
-        } else {
-          promptText += `\n\nUser Instruction: ${ext}`;
-        }
+        promptText += `\n\nUser Instruction: ${ext}`;
       }
 
       const parsedData = await callAiChatCompletion({
@@ -1975,7 +1990,8 @@ if (typeof module !== 'undefined' && module.exports) {
     summarizeMediaContext,
     parseNetflixMetadataFromTab,
     parseYouTubeMetadataFromTab,
-    parseNetflixTitleString
+    parseNetflixTitleString,
+    DEFAULT_AI_PROMPT_EXTENSION
   };
 } else if (typeof self !== 'undefined') {
   self.MunmekAI = {
@@ -1994,7 +2010,8 @@ if (typeof module !== 'undefined' && module.exports) {
     summarizeMediaContext,
     parseNetflixMetadataFromTab,
     parseYouTubeMetadataFromTab,
-    parseNetflixTitleString
+    parseNetflixTitleString,
+    DEFAULT_AI_PROMPT_EXTENSION
   };
 }
 

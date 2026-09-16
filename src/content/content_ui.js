@@ -53,9 +53,6 @@
     if (matchKey && cache.has(`${matchKey}__${langKey}`)) {
       return cache.get(`${matchKey}__${langKey}`);
     }
-    if (cache.has(langKey)) {
-      return cache.get(langKey);
-    }
 
     if (wordKey && cache.has(`${wordKey}__${sentenceKey}`)) {
       return cache.get(`${wordKey}__${sentenceKey}`);
@@ -64,18 +61,27 @@
       return cache.get(`${matchKey}__${sentenceKey}`);
     }
 
-    const sentenceCached = cache.get(sentenceKey);
-    if (sentenceCached) {
-      const wordsAnalysis = Array.isArray(sentenceCached.words_analysis)
-        ? sentenceCached.words_analysis
-        : (Array.isArray(sentenceCached.words) ? sentenceCached.words : (Array.isArray(sentenceCached.analysis) ? sentenceCached.analysis : null));
-      if (Array.isArray(wordsAnalysis) && wordsAnalysis.length > 0) {
-        const item = wordsAnalysis.find((w) => {
-          const s = cleanKoreanWord(w.surface || w.word || '');
-          const b = cleanKoreanWord(w.base || '');
-          return (s && (s === wordKey || s === matchKey)) || (b && (b === wordKey || b === matchKey));
-        });
-        if (item) return sentenceCached;
+    return null;
+  }
+
+  function findCompoundPair(candidates, targetWord) {
+    if (!candidates || !Array.isArray(candidates) || !targetWord) return null;
+    const cleanTarget = cleanKoreanLemma(targetWord);
+    if (cleanTarget.length < 2) return null;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const c1Text = cleanKoreanLemma(candidates[i].text || '');
+      if (!c1Text || c1Text === cleanTarget || c1Text.length >= cleanTarget.length) continue;
+      if (cleanTarget.startsWith(c1Text)) {
+        const remainder = cleanTarget.slice(c1Text.length);
+        const match2 = candidates.find((c, idx) => idx !== i && cleanKoreanLemma(c.text || '') === remainder);
+        if (match2) {
+          return {
+            part1: candidates[i],
+            part2: match2,
+            target: cleanTarget
+          };
+        }
       }
     }
     return null;
@@ -176,13 +182,35 @@
       return `<button type="button" class="chip" data-candidate="${escapeHtml(c.text)}" style="cursor: pointer; border: ${borderStyle}; background: ${bgStyle}; color: ${colorStyle}; padding: 4px 10px; border-radius: 8px; font-weight: 600; font-size: 0.88em; display: inline-flex; align-items: center; transition: all 0.15s ease;" title="${isLlmFallback ? 'No local dictionary entry (Click for Quick LLM Lookup)' : 'Local Dictionary Entry Available'}">${escapeHtml(c.text)}${badgeHtml}</button>`;
     };
 
+    const compoundPair = findCompoundPair(primaryCandidates, state.originalHoverWord || state.word);
+
     let candidateChipsHtml = '';
     if (primaryCandidates.length > 0) {
-      candidateChipsHtml = `
-        <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px;">
-          ${primaryCandidates.slice(0, 6).map(renderSingleChip).join('')}
-        </div>
-      `;
+      if (compoundPair) {
+        const p1 = compoundPair.part1;
+        const p2 = compoundPair.part2;
+        const groupHtml = `
+          <div class="compound-pill-group" style="display: inline-flex; align-items: center; background: #f0faf7; border: 1.5px solid #2f5d62; border-radius: 9px; padding: 2px 5px; gap: 3px;" title="Compound constituents: ${escapeHtml(p1.text)} + ${escapeHtml(p2.text)}">
+            <span style="font-size: 0.72em; font-weight: 800; color: #17383b; margin-right: 2px; margin-left: 2px;">🧩</span>
+            ${renderSingleChip(p1)}
+            <span style="font-weight: 800; color: #2f5d62; font-size: 0.9em; padding: 0 1px;">+</span>
+            ${renderSingleChip(p2)}
+          </div>
+        `;
+        const others = primaryCandidates.filter(c => c.text !== p1.text && c.text !== p2.text).slice(0, 4);
+        candidateChipsHtml = `
+          <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;">
+            ${groupHtml}
+            ${others.map(renderSingleChip).join('')}
+          </div>
+        `;
+      } else {
+        candidateChipsHtml = `
+          <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px;">
+            ${primaryCandidates.slice(0, 6).map(renderSingleChip).join('')}
+          </div>
+        `;
+      }
       if (subCandidates.length > 0) {
         candidateChipsHtml += `
           <div class="sub-chips" style="margin-bottom: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 0.85em; opacity: 0.92;">
@@ -573,11 +601,11 @@
       : null;
 
     const isCardMatched = activeGroupMatch
-      ? Boolean(activeGroupMatch.matched && activeGroupMatch.itemIndex === itemIndex)
-      : Boolean((state.geminiMatchedGroupIndex === groupIndex || typeof state.geminiMatchedGroupIndex !== 'number') && state.geminiMatchedItemIndex === itemIndex);
+      ? Boolean(activeGroupMatch.matched && activeGroupMatch.itemIndex === itemIndex && typeof activeGroupMatch.defIndex === 'number')
+      : Boolean((state.geminiMatchedGroupIndex === groupIndex || typeof state.geminiMatchedGroupIndex !== 'number') && state.geminiMatchedItemIndex === itemIndex && typeof state.geminiMatchedDefIndex === 'number');
 
     const matchedDefIdx = isCardMatched
-      ? (activeGroupMatch ? activeGroupMatch.defIndex : state.geminiMatchedDefIndex)
+      ? (activeGroupMatch ? (activeGroupMatch.matched ? activeGroupMatch.defIndex : null) : state.geminiMatchedDefIndex)
       : null;
     const hasGeminiMatch = typeof matchedDefIdx === 'number';
 
@@ -610,9 +638,9 @@
     let geminiBadgeHtml = '';
     if (hasGeminiMatch) {
       if (validIndex === matchedDefIdx) {
-        geminiBadgeHtml = `<span style="background: #2f5d62; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ LLM Matched</span>`;
+        geminiBadgeHtml = `<span style="background: linear-gradient(135deg, #17383b 0%, #2f5d62 100%); color: #fff; padding: 3px 10px; border-radius: 999px; font-size: 0.74em; font-weight: 800; margin-left: 6px; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(47,93,98,0.25); border: 1px solid #17383b;">✨ LLM Matched</span>`;
       } else {
-        geminiBadgeHtml = `<span style="background: #e4f0ee; color: #17383b; border: 1px solid #2f5d62; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ LLM Matched (Def ${matchedDefIdx + 1})</span>`;
+        geminiBadgeHtml = `<span style="background: #e4f0ee; color: #17383b; border: 1.5px solid #2f5d62; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ LLM Matched (Def ${matchedDefIdx + 1})</span>`;
       }
     } else if (hasKoElectraMatch) {
       const isTopMatchedTab = validIndex === koelectraMatchedDefIdx;
@@ -625,14 +653,46 @@
       }
     }
 
+    const isCurrentDefLlmMatched = Boolean(hasGeminiMatch && validIndex === matchedDefIdx);
+    const defBoxBg = isCurrentDefLlmMatched ? '#f0faf7' : '#faf7f2';
+    const defBoxBorder = isCurrentDefLlmMatched ? '1.5px solid #99d5cb' : '1px solid #eadfce';
+    const defBoxBorderLeft = isCurrentDefLlmMatched ? '5px solid #2f5d62' : '4px solid #2f5d62';
+    const defBoxShadow = isCurrentDefLlmMatched ? 'box-shadow: 0 2px 10px rgba(47,93,98,0.1);' : '';
+
+    const aiMatchedBannerHtml = isCurrentDefLlmMatched
+      ? `<div style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.72em; font-weight: 800; color: #17383b; background: #d7ede7; padding: 2px 8px; border-radius: 5px; margin-bottom: 6px; letter-spacing: 0.02em;">
+          <span>✨</span><span>LLM Context-Matched Definition</span>
+         </div>`
+      : '';
+
     const tabsHtml = definitions.length > 1
       ? `<div class="def-tabs" style="display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; padding-bottom: 4px;">
           ${definitions.map((def, idx) => {
             const isActive = idx === validIndex;
-            const isMatchedTab = (isCardMatched && matchedDefIdx === idx) || (isKoElectraMatched && koelectraMatchedDefIdx === idx);
+            const isLlmTab = (isCardMatched && matchedDefIdx === idx);
+            const isMatchedTab = isLlmTab || (isKoElectraMatched && koelectraMatchedDefIdx === idx);
             const shortText = truncateText(stripHtml(def), 18);
             const tabScoreStr = (isStage2Enabled && defConfScores[idx]) ? ` (${defConfScores[idx]})` : '';
-            return `<button type="button" class="def-tab ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid ${isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4')}; background: ${isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff')}; color: ${isActive ? '#fff' : '#4f463a'};">Def ${idx + 1}: ${escapeHtml(shortText)}${tabScoreStr}${isMatchedTab ? ' ✨' : ''}</button>`;
+
+            let tabBg = isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff');
+            let tabColor = isActive ? '#fff' : '#4f463a';
+            let tabBorder = isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4');
+            let extraStyle = '';
+
+            if (isLlmTab) {
+              if (isActive) {
+                tabBg = 'linear-gradient(135deg, #17383b 0%, #2f5d62 100%)';
+                tabBorder = '#17383b';
+                extraStyle = 'box-shadow: 0 2px 6px rgba(47,93,98,0.3); font-weight: 800;';
+              } else {
+                tabBg = '#ebf7f4';
+                tabColor = '#17383b';
+                tabBorder = '#2f5d62';
+                extraStyle = 'box-shadow: 0 0 0 1px rgba(47,93,98,0.2); font-weight: 700;';
+              }
+            }
+
+            return `<button type="button" class="def-tab ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; padding: 4px 9px; border-radius: 6px; border: 1px solid ${tabBorder}; background: ${tabBg}; color: ${tabColor}; ${extraStyle}">Def ${idx + 1}: ${escapeHtml(shortText)}${tabScoreStr}${isMatchedTab ? ' ✨' : ''}</button>`;
           }).join('')}
          </div>`
       : '';
@@ -648,7 +708,8 @@
             <button type="button" class="chip" data-action="anki-def" data-item-index="${itemIndex}" data-def-index="${validIndex}" title="Add or update this specific definition in Anki" style="cursor: pointer; font-size: 0.76em; padding: 2px 8px; border: none; background: #2f5d62; color: #fff; border-radius: 6px;">+ Anki</button>
           </div>
           ${tabsHtml}
-          <div class="def-text ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} style="font-size: 0.94em; font-weight: 400; color: #1e1b16; background: #faf7f2; border: 1px solid #eadfce; border-left: 4px solid #2f5d62; border-radius: 8px; padding: 10px 12px; line-height: 1.65; white-space: pre-line;">
+          <div class="def-text ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} style="font-size: 0.94em; font-weight: 400; color: #1e1b16; background: ${defBoxBg}; border: ${defBoxBorder}; border-left: ${defBoxBorderLeft}; ${defBoxShadow} border-radius: 8px; padding: 10px 12px; line-height: 1.65; white-space: pre-line;">
+            ${aiMatchedBannerHtml}
             ${renderCollapsibleDefinition(selectedDef, itemIndex)}
           </div>
          </div>`
@@ -1002,18 +1063,28 @@
   }
 
   function autoSelectBestDefinitionFromGemini(state, analysisData) {
-    if (!state || !analysisData || !Array.isArray(state.dictionaryEntries) || state.dictionaryEntries.length === 0) return;
+    if (!state) return;
+    if (!analysisData || !Array.isArray(state.dictionaryEntries) || state.dictionaryEntries.length === 0) {
+      state.geminiMatchedGroupIndex = null;
+      state.geminiMatchedItemIndex = null;
+      state.geminiMatchedDefIndex = null;
+      state.geminiMatchesByGroup = null;
+      state.geminiMatchedBase = null;
+      state.geminiMatchedSurface = null;
+      return;
+    }
 
-    const textFragments = [];
     let geminiPos = '';
     let geminiBase = '';
     let geminiHanja = '';
-    const meaningFragments = [];
+    const definitionFragments = [];
+    const grammarFragments = [];
 
     if (typeof analysisData === 'object') {
-      if (analysisData.definition) meaningFragments.push(String(analysisData.definition));
-      if (analysisData.meaning) meaningFragments.push(String(analysisData.meaning));
-      if (analysisData.translation) meaningFragments.push(String(analysisData.translation));
+      if (analysisData.definition) definitionFragments.push(String(analysisData.definition));
+      if (analysisData.meaning) definitionFragments.push(String(analysisData.meaning));
+      if (analysisData.translation) definitionFragments.push(String(analysisData.translation));
+      if (analysisData.grammar || analysisData.grammar_notes) grammarFragments.push(String(analysisData.grammar || analysisData.grammar_notes));
 
       const wordsAnalysis = Array.isArray(analysisData.words_analysis)
         ? analysisData.words_analysis
@@ -1022,11 +1093,18 @@
       if (Array.isArray(wordsAnalysis) && wordsAnalysis.length > 0) {
         const cleanW = cleanKoreanWord(state.word || '');
         const cleanM = cleanKoreanWord(state.dictionaryMatch || '');
+        const rawW = cleanKoreanLemma(state.word || '');
         const targetItem = wordsAnalysis.find((item) => {
           const s = cleanKoreanWord(item.surface || item.word || '');
           const b = cleanKoreanWord(item.base || '');
-          return (s && (s === cleanW || s === cleanM || cleanW.startsWith(s))) || (b && (b === cleanW || b === cleanM));
-        });
+          const rawS = cleanKoreanLemma(item.surface || item.word || '');
+          const rawB = cleanKoreanLemma(item.base || '');
+          if (s && (s === cleanW || s === cleanM || cleanW.startsWith(s) || s.startsWith(cleanW))) return true;
+          if (b && (b === cleanW || b === cleanM || cleanW.startsWith(b) || b.startsWith(cleanW))) return true;
+          if (rawS && (rawS === rawW || rawW.startsWith(rawS) || rawS.startsWith(rawW))) return true;
+          if (rawB && (rawB === rawW || rawW.startsWith(rawB) || rawB.startsWith(rawW))) return true;
+          return false;
+        }) || (wordsAnalysis.length === 1 ? wordsAnalysis[0] : null);
 
         if (targetItem) {
           if (targetItem.pos) geminiPos = String(targetItem.pos).toLowerCase();
@@ -1034,32 +1112,63 @@
             geminiBase = cleanKoreanLemma(targetItem.base);
             state.geminiMatchedBase = geminiBase;
           }
+          if (targetItem.surface || targetItem.word) {
+            state.geminiMatchedSurface = cleanKoreanWord(targetItem.surface || targetItem.word);
+          }
           if (targetItem.hanja) geminiHanja = String(targetItem.hanja).trim();
-          if (Array.isArray(targetItem.definitions)) meaningFragments.push(...targetItem.definitions.map(String));
-          if (targetItem.definition) meaningFragments.push(String(targetItem.definition));
-          if (targetItem.meaning) meaningFragments.push(String(targetItem.meaning));
+          if (Array.isArray(targetItem.definitions)) definitionFragments.push(...targetItem.definitions.map(String));
+          if (targetItem.definition) definitionFragments.push(String(targetItem.definition));
+          if (targetItem.meaning) definitionFragments.push(String(targetItem.meaning));
+          if (targetItem.grammar_notes) grammarFragments.push(String(targetItem.grammar_notes));
+          if (targetItem.notes) grammarFragments.push(String(targetItem.notes));
+
           Object.keys(targetItem).forEach((k) => {
             const kl = k.toLowerCase();
             if (kl.includes('translation') || kl.includes('meaning') || kl.includes('japanese') || kl.includes('gloss')) {
-              if (typeof targetItem[k] === 'string') meaningFragments.push(targetItem[k]);
+              if (typeof targetItem[k] === 'string') definitionFragments.push(targetItem[k]);
             }
           });
         }
       }
     }
 
-    const geminiMeaningText = meaningFragments.join(' ').toLowerCase();
-    if (!geminiMeaningText.trim() && !geminiBase) return;
-
-    const dictGroups = groupEntriesByDictTitle(state.dictionaryEntries);
-    if (!Array.isArray(dictGroups) || dictGroups.length === 0) return;
-
     const extractTokens = (str) => {
       return (String(str || '').toLowerCase().match(/[a-zA-Z0-9\u00C0-\u024F\u3040-\u30ff\u4e00-\u9faf\uac00-\ud7a3]{2,}/g) || []);
     };
 
     const stopWords = new Set(['to', 'a', 'an', 'the', 'and', 'or', 'of', 'in', 'is', 'attached', 'modify', 'suffix', 'verb', 'noun', 'stem', 'grammatical', 'context', 'ending']);
-    const geminiTokens = new Set(extractTokens(geminiMeaningText).filter(t => !stopWords.has(t)));
+    const primaryMeaningText = (definitionFragments.length > 0 ? definitionFragments : grammarFragments).join(' ').toLowerCase();
+    if (!primaryMeaningText.trim() && !geminiBase) {
+      state.geminiMatchedGroupIndex = null;
+      state.geminiMatchedItemIndex = null;
+      state.geminiMatchedDefIndex = null;
+      state.geminiMatchesByGroup = null;
+      state.geminiMatchedBase = null;
+      state.geminiMatchedSurface = null;
+      return;
+    }
+
+    const geminiDefTokens = new Set(extractTokens(primaryMeaningText).filter(t => !stopWords.has(t)));
+    const hasGeminiDefs = geminiDefTokens.size > 0;
+
+    function tokenMatchesGemini(token) {
+      if (!token || stopWords.has(token)) return false;
+      if (geminiDefTokens.has(token)) return true;
+      if (token.length >= 4) {
+        for (const gt of geminiDefTokens) {
+          if (gt.length >= 4) {
+            if (token.startsWith(gt) || gt.startsWith(token)) return true;
+            const stem1 = token.replace(/(?:ing|ed|es|s)$/, '');
+            const stem2 = gt.replace(/(?:ing|ed|es|s)$/, '');
+            if (stem1.length >= 3 && stem1 === stem2) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    const dictGroups = groupEntriesByDictTitle(state.dictionaryEntries);
+    if (!Array.isArray(dictGroups) || dictGroups.length === 0) return;
 
     // Pass 1: Score each dictionary group and find candidate winners
     let primaryMatchedHanja = geminiHanja;
@@ -1077,19 +1186,14 @@
       group.items.forEach((item, itemIdx) => {
         const itemPos = String(item.pos || '').toLowerCase();
         const itemBase = cleanKoreanWord(item.base || item.surface || item.word || '');
+        const rawItemBase = cleanKoreanLemma(item.base || item.surface || item.word || '');
         const rawDefs = Array.isArray(item.definitions) ? item.definitions : [];
         const splitDefs = splitEmbeddedDefinitions(rawDefs);
 
-        let posBonus = 0;
-        if (geminiPos && itemPos) {
-          if (itemPos.includes(geminiPos) || geminiPos.includes(itemPos)) posBonus += 6;
-        }
-
-        let baseBonus = 0;
-        if (geminiBase && itemBase) {
-          if (geminiBase === itemBase) baseBonus += 20;
-          else if (geminiBase.startsWith(itemBase) || itemBase.startsWith(geminiBase)) baseBonus += 10;
-        }
+        // Tier 1: Evaluate definitions within this entry
+        let bestItemDefIdx = 0;
+        let bestItemDefScore = -1;
+        let bestItemTokenCount = 0;
 
         splitDefs.forEach((defText, defIdx) => {
           const isStub = defText.includes('Conjugation variant:') || defText.includes('->');
@@ -1098,24 +1202,58 @@
           const tokens = extractTokens(defText);
           let tokenScore = 0;
           tokens.forEach((t) => {
-            if (!stopWords.has(t) && (geminiTokens.has(t) || geminiMeaningText.includes(t))) {
+            if (tokenMatchesGemini(t)) {
               tokenScore += t.length >= 4 ? 3 : 2;
             }
           });
 
           // Stage 2 Neural Multilingual E5 alignment bonus
           const e5DefBonus = (typeof item._bestDefIndex === 'number' && item._bestDefIndex === defIdx) ? 20 : 0;
-          const e5ConfBonus = item._confidenceScore ? (parseInt(item._confidenceScore, 10) / 4) : 0;
+          const defScore = (tokenScore > 0 ? (tokenScore * 20) : 0) + e5DefBonus;
 
-          const totalScore = tokenScore + posBonus + baseBonus + e5DefBonus + e5ConfBonus;
-          if (totalScore > bestScore) {
-            bestScore = totalScore;
-            bestItemIdx = itemIdx;
-            bestDefIdx = defIdx;
-            bestTokenScore = tokenScore;
-            bestItem = item;
+          if (defScore > bestItemDefScore) {
+            bestItemDefScore = defScore;
+            bestItemDefIdx = defIdx;
+            bestItemTokenCount = tokenScore;
           }
         });
+
+        // Tier 2: Entry-level score (Base match + POS match + Hanja match + E5 confidence)
+        const hasDefMatch = bestItemTokenCount > 0;
+        let entryScore = 0;
+        if (geminiBase) {
+          const cleanGeminiBase = cleanKoreanWord(geminiBase);
+          const isExactBase = (cleanGeminiBase === itemBase || geminiBase === rawItemBase);
+          const isPrefixBase = (!isExactBase && (cleanGeminiBase.startsWith(itemBase) || itemBase.startsWith(cleanGeminiBase) ||
+                                geminiBase.startsWith(rawItemBase) || rawItemBase.startsWith(geminiBase)));
+          if (isExactBase) {
+            entryScore += (!hasGeminiDefs || hasDefMatch) ? 80 : 10;
+          } else if (isPrefixBase) {
+            entryScore += (!hasGeminiDefs || hasDefMatch) ? 40 : 5;
+          }
+        }
+        if (geminiPos && itemPos) {
+          if (itemPos.includes(geminiPos) || geminiPos.includes(itemPos)) {
+            entryScore += (!hasGeminiDefs || hasDefMatch) ? 30 : 5;
+          }
+        }
+        if (geminiHanja && item.hanja) {
+          const h = String(item.hanja).trim();
+          if (h === geminiHanja || geminiHanja.includes(h) || h.includes(geminiHanja)) {
+            entryScore += 60;
+          }
+        }
+        const e5ConfBonus = item._confidenceScore ? (parseInt(item._confidenceScore, 10) / 4) : 0;
+        entryScore += e5ConfBonus;
+
+        const totalCardScore = entryScore + (bestItemDefScore > 0 ? bestItemDefScore : 0);
+        if (totalCardScore > bestScore) {
+          bestScore = totalCardScore;
+          bestItemIdx = itemIdx;
+          bestDefIdx = bestItemDefIdx;
+          bestTokenScore = bestItemTokenCount;
+          bestItem = item;
+        }
       });
 
       groupBestList.push({
@@ -1129,7 +1267,7 @@
     });
 
     // If any group had strong token matches (e.g. English group), inherit its Hanja to anchor CJK dictionaries
-    const strongGroup = groupBestList.find(g => (g.tokenScore >= 3 || (g.bestItem && (g.bestItem.dictTargetLanguage === 'en' || g.bestItem.dictTargetLanguage === 'eng') && g.bestScore >= 20)) && g.bestItem && g.bestItem.hanja);
+    const strongGroup = groupBestList.find(g => (g.tokenScore >= 2 || (g.bestItem && (g.bestItem.dictTargetLanguage === 'en' || g.bestItem.dictTargetLanguage === 'eng') && g.bestScore >= 40)) && g.bestItem && g.bestItem.hanja);
     if (strongGroup && !primaryMatchedHanja) {
       primaryMatchedHanja = String(strongGroup.bestItem.hanja).trim();
     }
@@ -1143,6 +1281,7 @@
     let overallBestGroupIdx = (state && typeof state.selectedGroupIndex === 'number') ? state.selectedGroupIndex : 0;
     let overallBestItemIdx = 0;
     let overallBestDefIdx = 0;
+    let overallMatched = false;
 
     groupBestList.forEach((g) => {
       const group = dictGroups[g.groupIdx];
@@ -1164,7 +1303,7 @@
       let groupBestScore = g.bestScore;
       let groupBestItemIdx = g.bestItemIdx;
       let groupBestDefIdx = g.bestDefIdx;
-      let groupMatched = g.tokenScore > 0 || group.items.length === 1;
+      let groupMatched = false;
 
       if (primaryMatchedHanja && group.items.length > 1) {
         // Look for Hanja alignment across homonyms in this group
@@ -1194,13 +1333,23 @@
             highestConfIdx = itemIdx;
           }
         });
-        if (highestConf >= 65 && highestConfIdx >= 0) {
+        if (highestConf >= 75 && highestConfIdx >= 0) {
           groupBestItemIdx = highestConfIdx;
           const targetItem = group.items[highestConfIdx];
           const rawDefs = Array.isArray(targetItem.definitions) ? targetItem.definitions : [];
           const splitDefs = splitEmbeddedDefinitions(rawDefs);
           groupBestDefIdx = (typeof targetItem._bestDefIndex === 'number' && targetItem._bestDefIndex < splitDefs.length) ? targetItem._bestDefIndex : 0;
           groupMatched = true;
+        }
+      }
+
+      if (!groupMatched) {
+        if (hasGeminiDefs) {
+          // Strict requirement: Definition token must match when LLM provided explicit definitions/meanings
+          groupMatched = (g.tokenScore > 0);
+        } else {
+          // Fallback when LLM only provided base/POS without definition text
+          groupMatched = (g.bestScore >= 40) || (group.items.length === 1);
         }
       }
 
@@ -1211,15 +1360,16 @@
         matched: groupMatched
       };
 
-      if (isLangMatch && groupBestScore > overallBestScore) {
+      if (isLangMatch && groupMatched && groupBestScore > overallBestScore) {
         overallBestScore = groupBestScore;
         overallBestGroupIdx = g.groupIdx;
         overallBestItemIdx = groupBestItemIdx;
         overallBestDefIdx = groupBestDefIdx;
+        overallMatched = true;
       }
     });
 
-    if (overallBestScore >= 0) {
+    if (overallBestScore >= 0 && overallMatched) {
       state.geminiMatchedGroupIndex = overallBestGroupIdx;
       state.geminiMatchedItemIndex = overallBestItemIdx;
       state.geminiMatchedDefIndex = overallBestDefIdx;
@@ -1257,7 +1407,7 @@
     if (cleaned.endsWith('다') && cleaned.length >= 2) {
       return cleaned;
     }
-    return cleaned.replace(/(은|는|이|가|을|를|의|에|에서|와|과|도|만|으로|로)$/, '') || cleaned;
+    return cleaned.replace(/(이나마|에게서|에서는|이라도|이든지|만큼|대로|같이|처럼|밖에|이나|이란|이라|이야|까지|부터|보다|마다|조차|커녕|에서|에게|은|는|이|가|을|를|의|에|와|과|도|만|으로|로)$/, '') || cleaned;
   }
 
   function positionTooltip(x, y, fontSize = 15) {
@@ -1308,6 +1458,7 @@
     hideTooltip,
     splitEmbeddedDefinitions,
     groupEntriesByDictTitle,
+    getGeminiAnalysisForState,
     autoSelectBestDefinitionFromGemini,
     extractCustomFields,
     renderAnalysisSection,
@@ -1321,7 +1472,8 @@
     getDictionaryLanguage,
     getLlmResponseLanguage,
     renderActions,
-    renderDictionaryEntriesGrouped
+    renderDictionaryEntriesGrouped,
+    findCompoundPair
   };
 
   const targetGlobal = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : global);
