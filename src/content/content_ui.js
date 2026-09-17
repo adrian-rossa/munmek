@@ -70,14 +70,25 @@
     if (cleanTarget.length < 2) return null;
 
     for (let i = 0; i < candidates.length; i++) {
-      const c1Text = cleanKoreanLemma(candidates[i].text || '');
+      const c1 = candidates[i];
+      const c1Text = cleanKoreanLemma(c1.text || '');
       if (!c1Text || c1Text === cleanTarget || c1Text.length >= cleanTarget.length) continue;
       if (cleanTarget.startsWith(c1Text)) {
         const remainder = cleanTarget.slice(c1Text.length);
         const match2 = candidates.find((c, idx) => idx !== i && cleanKoreanLemma(c.text || '') === remainder);
         if (match2) {
+          // If part1 is a verb/adjective stem (e.g. '겁먹' from '겁먹다'), resolve to dictionary citation lemma
+          let part1 = c1;
+          if (c1.posHint?.includes('stem') || c1.reason?.includes('stem')) {
+            const citationMatch = candidates.find(c => c.text === c1Text + '다');
+            if (citationMatch) {
+              part1 = citationMatch;
+            } else {
+              part1 = { ...c1, text: c1Text + '다', posHint: c1.posHint ? c1.posHint.replace('/stem', '') : 'verb' };
+            }
+          }
           return {
-            part1: candidates[i],
+            part1,
             part2: match2,
             target: cleanTarget
           };
@@ -1064,15 +1075,13 @@
 
   function autoSelectBestDefinitionFromGemini(state, analysisData) {
     if (!state) return;
-    if (!analysisData || !Array.isArray(state.dictionaryEntries) || state.dictionaryEntries.length === 0) {
-      state.geminiMatchedGroupIndex = null;
-      state.geminiMatchedItemIndex = null;
-      state.geminiMatchedDefIndex = null;
-      state.geminiMatchesByGroup = null;
-      state.geminiMatchedBase = null;
-      state.geminiMatchedSurface = null;
-      return;
-    }
+    state.geminiMatchedGroupIndex = null;
+    state.geminiMatchedItemIndex = null;
+    state.geminiMatchedDefIndex = null;
+    state.geminiMatchesByGroup = null;
+    state.geminiMatchedBase = null;
+    state.geminiMatchedSurface = null;
+    if (!analysisData) return;
 
     let geminiPos = '';
     let geminiBase = '';
@@ -1092,17 +1101,19 @@
 
       if (Array.isArray(wordsAnalysis) && wordsAnalysis.length > 0) {
         const cleanW = cleanKoreanWord(state.word || '');
+        const cleanOrig = cleanKoreanWord(state.originalHoverWord || '');
         const cleanM = cleanKoreanWord(state.dictionaryMatch || '');
         const rawW = cleanKoreanLemma(state.word || '');
+        const rawOrig = cleanKoreanLemma(state.originalHoverWord || '');
         const targetItem = wordsAnalysis.find((item) => {
           const s = cleanKoreanWord(item.surface || item.word || '');
           const b = cleanKoreanWord(item.base || '');
           const rawS = cleanKoreanLemma(item.surface || item.word || '');
           const rawB = cleanKoreanLemma(item.base || '');
-          if (s && (s === cleanW || s === cleanM || cleanW.startsWith(s) || s.startsWith(cleanW))) return true;
-          if (b && (b === cleanW || b === cleanM || cleanW.startsWith(b) || b.startsWith(cleanW))) return true;
-          if (rawS && (rawS === rawW || rawW.startsWith(rawS) || rawS.startsWith(rawW))) return true;
-          if (rawB && (rawB === rawW || rawW.startsWith(rawB) || rawB.startsWith(rawW))) return true;
+          if (s && (s === cleanW || s === cleanOrig || s === cleanM || cleanW.startsWith(s) || s.startsWith(cleanW) || cleanOrig.startsWith(s) || s.startsWith(cleanOrig))) return true;
+          if (b && (b === cleanW || b === cleanOrig || b === cleanM || cleanW.startsWith(b) || b.startsWith(cleanW) || cleanOrig.startsWith(b) || b.startsWith(cleanOrig))) return true;
+          if (rawS && (rawS === rawW || rawS === rawOrig || rawW.startsWith(rawS) || rawS.startsWith(rawW) || rawOrig.startsWith(rawS) || rawS.startsWith(rawOrig))) return true;
+          if (rawB && (rawB === rawW || rawB === rawOrig || rawW.startsWith(rawB) || rawB.startsWith(rawW) || rawOrig.startsWith(rawB) || rawB.startsWith(rawOrig))) return true;
           return false;
         }) || (wordsAnalysis.length === 1 ? wordsAnalysis[0] : null);
 
@@ -1130,6 +1141,18 @@
           });
         }
       }
+
+      if (!geminiBase && analysisData.base) {
+        geminiBase = cleanKoreanLemma(analysisData.base);
+        state.geminiMatchedBase = geminiBase;
+      }
+      if (!state.geminiMatchedSurface && (analysisData.surface || analysisData.word)) {
+        state.geminiMatchedSurface = cleanKoreanWord(analysisData.surface || analysisData.word);
+      }
+    }
+
+    if (!Array.isArray(state.dictionaryEntries) || state.dictionaryEntries.length === 0) {
+      return;
     }
 
     const extractTokens = (str) => {

@@ -548,6 +548,52 @@ Return JSON with "words_analysis": [{
       expect(tooltipEl.innerHTML).toContain('data-candidate="다"');
       expect(tooltipEl.innerHTML).not.toContain('compound-banner');
     });
+
+    it('resolves verb stem to dictionary citation lemma (겁먹 -> 겁먹다) in compound pair', () => {
+      const candidates = [
+        { text: '겁먹다', posHint: 'verb', score: 96 },
+        { text: '겁먹', posHint: 'verb/stem', score: 80 },
+        { text: '지', posHint: 'grammar', score: 75 }
+      ];
+
+      const compound = MunmekUI.findCompoundPair(candidates, '겁먹지');
+      expect(compound).not.toBeNull();
+      expect(compound.part1.text).toBe('겁먹다');
+      expect(compound.part2.text).toBe('지');
+      expect(compound.target).toBe('겁먹지');
+    });
+
+    it('extracts geminiMatchedBase from LLM response even when dictionaryEntries is empty', () => {
+      const state = {
+        word: '긴',
+        originalHoverWord: '긴',
+        dictionaryMatch: '',
+        dictionaryEntries: [] // Empty local dictionary entries
+      };
+
+      const analysisData = {
+        words_analysis: [
+          {
+            surface: '긴',
+            base: '길다',
+            pos: 'adjective',
+            definitions: ['long; prolonged']
+          }
+        ]
+      };
+
+      MunmekUI.autoSelectBestDefinitionFromGemini(state, analysisData);
+      expect(state.geminiMatchedBase).toBe('길다');
+      expect(state.geminiMatchedSurface).toBe('긴');
+    });
+
+    it('generates 길다 candidate from modifier 긴 via ㄹ-drop rule', () => {
+      const KoreanLemmatizer = require('../src/nlp/korean_lemmatizer.js');
+      const candidates = KoreanLemmatizer.deconjugate('긴');
+      const gilMatch = candidates.find(c => c.text === '길다');
+      expect(gilMatch).toBeDefined();
+      expect(gilMatch.text).toBe('길다');
+    });
   });
 });
 

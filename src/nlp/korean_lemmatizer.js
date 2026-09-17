@@ -765,8 +765,19 @@
     }
   }
 
-  // ㄹ 탈락 (e.g., 사네요 -> 살다, 아는 -> 알다, 만드세요 -> 만들다)
+  // ㄹ 탈락 (e.g., 사네요 -> 살다, 아는 -> 알다, 만드세요 -> 만들다, 긴 -> 길다, 먼 -> 멀다)
   function deconjugateRieulDrop(surface, addCandidate) {
+    // Modifier ending -(으)ㄴ: syllable with batchim 'ㄴ' (e.g. 긴 -> 길다, 먼 -> 멀다, 만든 -> 만들다)
+    if (surface && surface.length >= 1) {
+      const lastChar = surface[surface.length - 1];
+      if (Jamo.isHangulSyllable(lastChar) && Jamo.getBatchim(lastChar) === 'ㄴ') {
+        const rieulStem = surface.slice(0, -1) + Jamo.setBatchim(lastChar, 'ㄹ');
+        if (rieulStem !== '할' && rieulStem !== '될' && !rieulStem.endsWith('할') && !rieulStem.endsWith('될')) {
+          addCandidate(rieulStem + '다', 'ㄹ-drop (modifier ㄴ -> stem + ㄹ + 다)', 84);
+        }
+      }
+    }
+
     const endings = ['네요', '세요', '십니다', '습니다', 'ㄴ다', '는', 'ㄴ'];
     for (const end of endings) {
       if (surface.endsWith(end) && surface.length > end.length) {
