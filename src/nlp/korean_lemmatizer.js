@@ -21,6 +21,8 @@
     { text: '에서의', type: 'particle', rule: 'particle-at-possessive' },
     { text: '에게는', type: 'particle', rule: 'particle-to-person-topic' },
     { text: '한테는', type: 'particle', rule: 'particle-to-person-topic' },
+    { text: '에게도', type: 'particle', rule: 'particle-to-person-also' },
+    { text: '한테도', type: 'particle', rule: 'particle-to-person-also' },
     { text: '으로의', type: 'particle', rule: 'particle-towards-possessive' },
     { text: '까지는', type: 'particle', rule: 'particle-until-topic' },
     { text: '부터는', type: 'particle', rule: 'particle-from-topic' },

@@ -47,7 +47,7 @@
   - Automatically synthesizes multi-part compound predicates (`데려다` + `주다` $\rightarrow$ `데려다주다`, `빠져` + `나가다` $\rightarrow$ `빠져나가다`).
   - Decomposes single-token compound verbs (`날아오르다` $\rightarrow$ `날다`, `오르다`) and presents constituent verbs in a dedicated `[관련]` sub-row.
 - **Colloquial Copula Resolution**: Recovers base forms from contracted copular expressions (`말이야` $\rightarrow$ `말이다`, `거예요` $\rightarrow$ `것이다`).
-- **Compound Noun Preservation & Linked Candidate Pills**: Identifies compound nouns (`조타수`, `감시탑`, `조명탄`) while simultaneously providing root nouns (`감시`, `탑`) as selectable chips. When a target word is composed of multiple valid candidates (e.g. `어디다` = `어디` + `다`), Munmek visually groups them in linked candidate pills (`[ 🧩 part1 + part2 ]`) directly in the candidate chips row.
+- **Compound Noun Preservation & Linked Candidate Pills**: Identifies compound nouns (`조타수`, `감시탑`, `조명탄`) while simultaneously providing root nouns (`감시`, `탑`) as selectable chips. When a target word is composed of multiple valid candidates (e.g. `어디다` = `어디` + `다`, or multi-token chains like `할미에게도` = `할미` + `에게` + `도`), Munmek visually groups them in linked candidate pills (`[ 🧩 part1 + part2 + part3 ]`) directly in the candidate chips row so each constituent can be inspected in the dictionary.
 - **Pure-JS Layered De-Stacker Fallback**: Modular Hangul Jamo math (초성/중성/종성) providing fallback particle stripping, modal peeling (`-겠-`, `-았/었-`, `-시/셨-`), and connective ending deconjugations.
 
 ### 🧠 Neural Disambiguation & Semantic Reranking (Optional / Developer Mode)
@@ -260,7 +260,7 @@ munmek/
 │   ├── models/                # KoELECTRA INT8 ONNX, Multilingual E5 INT8 ONNX & vocab
 │   ├── onnx/                  # ONNXRuntime-Web engine & WordPiece tokenizer
 │   └── jszip.min.js           # ZIP extraction library for termbank imports
-└── test/                      # Vitest automated test suite (194 passing unit tests across 17 files)
+└── test/                      # Vitest automated test suite (201 passing unit tests across 17 files)
 ```
 
 ---

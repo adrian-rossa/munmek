@@ -442,7 +442,7 @@
     if (llmCands && Array.isArray(llmCands)) {
       for (const lc of llmCands) {
         if (!candidateList.find((c) => c.text === lc.text)) {
-          candidateList.unshift(lc);
+          candidateList.unshift({ ...lc, isLlmInjected: true });
         }
       }
     }
@@ -1349,7 +1349,7 @@
 
         // 3. If missing from candidate list, inject LLM base form as candidate (preserving 떠나다 injection)
         if (!matchingCand && cleanTarget) {
-          matchingCand = { text: cleanTarget, score: 96, posHint: 'verb/noun', reason: 'LLM Matched Base' };
+          matchingCand = { text: cleanTarget, score: 96, posHint: 'verb/noun', reason: 'LLM Matched Base', isLlmInjected: true };
           if (!Array.isArray(state.candidateList)) state.candidateList = [];
           state.candidateList.unshift(matchingCand);
         }
@@ -1389,6 +1389,8 @@
         dictId: currentSelectedDictionaryId
       }, (res) => {
         if (res && res.hits && res.hits.length > 0 && state) {
+          if (!state.verifiedDictionaryCandidates) state.verifiedDictionaryCandidates = new Set();
+          state.verifiedDictionaryCandidates.add(selectedCandidate);
           let sortedHits = sortHitsByBaseForm(res.hits);
           state.dictionaryEntries = sortedHits;
           state.dictionaryEntry = sortedHits[0];
@@ -1408,6 +1410,8 @@
             dictId: currentSelectedDictionaryId
           }, (resBase) => {
             if (resBase && resBase.hits && resBase.hits.length > 0 && state) {
+              if (!state.verifiedDictionaryCandidates) state.verifiedDictionaryCandidates = new Set();
+              state.verifiedDictionaryCandidates.add(selectedCandidate);
               let sortedHits = sortHitsByBaseForm(resBase.hits);
               state.dictionaryEntries = sortedHits;
               state.dictionaryEntry = sortedHits[0];
@@ -1510,6 +1514,8 @@
     episodeNumber: null,
     episodeTitle: '',
     synopsis: '',
+    episodeSynopsis: '',
+    showSynopsis: '',
     netflixId: ''
   };
 
@@ -1650,32 +1656,37 @@
         }
       }
 
-      // 4. Scrape direct synopsis from Netflix DOM or JSON-LD
-      let directSynopsis = '';
-      const synopsisEl = document.querySelector('.previewModal--synopsis, .synopsis, [data-uia="episode-synopsis"], .titleDescription--synopsis, .episode-synopsis, [data-uia="video-synopsis"], .ltr-191i9y8, .about-synopsis');
-      if (synopsisEl && synopsisEl.textContent) {
-        directSynopsis = synopsisEl.textContent.trim();
+      // 4. Scrape direct episode and show synopsis from Netflix DOM or JSON-LD
+      let episodeSynopsis = '';
+      let showSynopsis = '';
+
+      // Check player overlay / paused player synopsis elements specifically for episode summary
+      const epSynopsisEl = document.querySelector('[data-uia="episode-synopsis"], .episode-synopsis, [data-uia="video-synopsis"], [data-uia="control-header-synopsis"], .evidence-overlay, .watch-video--evidence-overlay-text, .previewModal--synopsis, .titleDescription--synopsis');
+      if (epSynopsisEl && epSynopsisEl.textContent) {
+        episodeSynopsis = epSynopsisEl.textContent.trim();
       }
 
-      if (!directSynopsis) {
-        const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-        for (const script of jsonLdScripts) {
-          try {
-            const parsed = JSON.parse(script.textContent || '{}');
-            if (parsed.description) {
-              directSynopsis = parsed.description.trim();
-              if (!title && parsed.name) title = parsed.name.trim();
-              break;
-            }
-          } catch (e) {}
-        }
+      const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+      for (const script of jsonLdScripts) {
+        try {
+          const parsed = JSON.parse(script.textContent || '{}');
+          if (parsed.description) {
+            showSynopsis = parsed.description.trim();
+            if (!title && parsed.name) title = parsed.name.trim();
+            break;
+          }
+        } catch (e) {}
       }
+
+      const directSynopsis = episodeSynopsis || showSynopsis;
 
       // Fall back to persistent cache if current state is missing values
       if (!title && lastKnownNetflixMeta.title) title = lastKnownNetflixMeta.title;
       if (!seasonNumber && lastKnownNetflixMeta.seasonNumber) seasonNumber = lastKnownNetflixMeta.seasonNumber;
       if (!episodeNumber && lastKnownNetflixMeta.episodeNumber) episodeNumber = lastKnownNetflixMeta.episodeNumber;
       if (!epText && lastKnownNetflixMeta.episodeTitle) epText = lastKnownNetflixMeta.episodeTitle;
+      if (!episodeSynopsis && lastKnownNetflixMeta.episodeSynopsis) episodeSynopsis = lastKnownNetflixMeta.episodeSynopsis;
+      if (!showSynopsis && lastKnownNetflixMeta.showSynopsis) showSynopsis = lastKnownNetflixMeta.showSynopsis;
       if (!directSynopsis && lastKnownNetflixMeta.synopsis) directSynopsis = lastKnownNetflixMeta.synopsis;
 
       // Update persistent cache with any newly discovered values
@@ -1683,6 +1694,8 @@
       if (seasonNumber) lastKnownNetflixMeta.seasonNumber = seasonNumber;
       if (episodeNumber) lastKnownNetflixMeta.episodeNumber = episodeNumber;
       if (epText) lastKnownNetflixMeta.episodeTitle = epText;
+      if (episodeSynopsis) lastKnownNetflixMeta.episodeSynopsis = episodeSynopsis;
+      if (showSynopsis) lastKnownNetflixMeta.showSynopsis = showSynopsis;
       if (directSynopsis) lastKnownNetflixMeta.synopsis = directSynopsis;
 
       const subText = subtitleHistoryBuffer.slice(-12).join(' ');
@@ -1697,9 +1710,11 @@
           episodeNumber,
           episodeTitle: epText,
           synopsis: directSynopsis,
+          episodeSynopsis,
+          showSynopsis,
           hasDirectSynopsis: Boolean(directSynopsis),
           subtitles: subText,
-          pageDetails: `${epText} ${directSynopsis}`.trim()
+          pageDetails: `${epText} ${episodeSynopsis || showSynopsis}`.trim()
         },
         text: `${title} ${epText} ${directSynopsis} ${subText}`.trim()
       };

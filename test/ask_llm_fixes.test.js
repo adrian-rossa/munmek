@@ -32,6 +32,7 @@ describe('Ask LLM Fixes & Dynamic Tracking', () => {
         if (tag === 'div') return tooltipEl;
         return { style: {}, setAttribute: () => {}, addEventListener: () => {} };
       },
+      getElementById: (id) => tooltipEl,
       body: mockBody
     };
 
@@ -594,7 +595,86 @@ Return JSON with "words_analysis": [{
       expect(gilMatch).toBeDefined();
       expect(gilMatch.text).toBe('길다');
     });
+
+    it('decomposes 3-part compound (할미 + 에게 + 도) and does NOT corrupt noun 할미 into 할미다', () => {
+      const candidates = [
+        { text: '할미에게도', posHint: 'surface', score: 100 },
+        { text: '할미에게', posHint: 'noun/stem', score: 90 },
+        { text: '할미', posHint: 'noun', score: 78, reason: 'stem prefix subword (할미)' },
+        { text: '에게', posHint: 'noun', score: 76, reason: 'stem suffix subword (에게)' },
+        { text: '도', posHint: 'particle', score: 75, reason: 'particle (도)' }
+      ];
+
+      const compound = MunmekUI.findCompoundChain(candidates, '할미에게도');
+      expect(compound).not.toBeNull();
+      expect(compound.parts.length).toBe(3);
+      expect(compound.parts.map(p => p.text)).toEqual(['할미', '에게', '도']);
+      // Verify noun is preserved and NOT converted to 할미다
+      expect(compound.parts[0].text).toBe('할미');
+      expect(compound.parts[0].text).not.toBe('할미다');
+    });
+
+    it('cleans compound particle 에게도 via cleanKoreanWord', () => {
+      expect(MunmekUI.cleanKoreanWord('할미에게도')).toBe('할미');
+    });
+
+    it('renders feedback toast at the top of tooltip before dictionary content', () => {
+      document.body.innerHTML = '';
+      const state = {
+        word: '따라잡다',
+        originalHoverWord: '따라잡을',
+        dictionaryMatch: '따라잡다',
+        feedback: 'Created a new Anki card.',
+        feedbackType: 'success',
+        candidateList: [
+          { text: '따라잡다', posHint: 'verb', isLlmInjected: true }
+        ],
+        dictionaryEntries: []
+      };
+
+      MunmekUI.renderTooltip(state, new Map(), () => {}, () => {}, () => {});
+      const tooltip = document.getElementById('munmek-lookup-tooltip');
+      expect(tooltip).not.toBeNull();
+      const html = tooltip.innerHTML;
+      expect(html).toContain('toast-feedback');
+      expect(html).toContain('Created a new Anki card.');
+
+      // Verify toast-feedback occurs before dict-empty or candidate chips in the HTML
+      const toastIdx = html.indexOf('toast-feedback');
+      const titleIdx = html.indexOf('class="title"');
+      expect(titleIdx).toBeGreaterThan(-1);
+      expect(toastIdx).toBeGreaterThan(titleIdx);
+    });
+
+    it('prioritizes LLM-injected candidates so they are not sliced off in candidate chips', () => {
+      document.body.innerHTML = '';
+      const state = {
+        word: '잡다',
+        originalHoverWord: '따라잡을',
+        dictionaryMatch: '잡다',
+        // Injected candidate 따라잡다 is at the end of a long list
+        candidateList: [
+          { text: '따라', posHint: 'noun' },
+          { text: '잡을', posHint: 'noun' },
+          { text: '잡다', posHint: 'verb' },
+          { text: '따르다', posHint: 'verb' },
+          { text: '잡', posHint: 'noun' },
+          { text: '을', posHint: 'particle' },
+          { text: '따라잡다', posHint: 'verb', isLlmInjected: true, reason: 'LLM Matched Base' }
+        ],
+        verifiedDictionaryCandidates: new Set(['따라', '잡을', '잡다', '따르다', '잡', '을']),
+        dictionaryEntries: []
+      };
+
+      MunmekUI.renderTooltip(state, new Map(), () => {}, () => {}, () => {});
+      const tooltip = document.getElementById('munmek-lookup-tooltip');
+      expect(tooltip).not.toBeNull();
+      // 따라잡다 must be rendered in the DOM chips despite being 7th in the candidate list
+      expect(tooltip.innerHTML).toContain('data-candidate="따라잡다"');
+      expect(tooltip.innerHTML).toContain('data-candidate="잡다"');
+    });
   });
 });
+
 
 

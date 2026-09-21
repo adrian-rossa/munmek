@@ -64,38 +64,84 @@
     return null;
   }
 
-  function findCompoundPair(candidates, targetWord) {
+  function findCompoundChain(candidates, targetWord) {
     if (!candidates || !Array.isArray(candidates) || !targetWord) return null;
     const cleanTarget = cleanKoreanLemma(targetWord);
     if (cleanTarget.length < 2) return null;
 
-    for (let i = 0; i < candidates.length; i++) {
-      const c1 = candidates[i];
-      const c1Text = cleanKoreanLemma(c1.text || '');
-      if (!c1Text || c1Text === cleanTarget || c1Text.length >= cleanTarget.length) continue;
-      if (cleanTarget.startsWith(c1Text)) {
-        const remainder = cleanTarget.slice(c1Text.length);
-        const match2 = candidates.find((c, idx) => idx !== i && cleanKoreanLemma(c.text || '') === remainder);
-        if (match2) {
-          // If part1 is a verb/adjective stem (e.g. '겁먹' from '겁먹다'), resolve to dictionary citation lemma
-          let part1 = c1;
-          if (c1.posHint?.includes('stem') || c1.reason?.includes('stem')) {
-            const citationMatch = candidates.find(c => c.text === c1Text + '다');
-            if (citationMatch) {
-              part1 = citationMatch;
-            } else {
-              part1 = { ...c1, text: c1Text + '다', posHint: c1.posHint ? c1.posHint.replace('/stem', '') : 'verb' };
+    function resolvePart(cand) {
+      const candText = cleanKoreanLemma(cand.text || '');
+      const isVerbAdjStem = (cand.posHint === 'verb/stem' || cand.posHint === 'adjective/stem' ||
+        /^Kiwi (?:verb|adjective|auxiliary) stem/i.test(cand.reason || ''));
+      if (isVerbAdjStem) {
+        const citationMatch = candidates.find(c => c.text === candText + '다');
+        if (citationMatch) return citationMatch;
+        return { ...cand, text: candText + '다', posHint: cand.posHint?.replace('/stem', '') || 'verb' };
+      }
+      return cand;
+    }
+
+    function searchChain(subTarget, usedIndices, depth) {
+      if (!subTarget) return [];
+      if (depth > 4) return null;
+
+      let bestSub = null;
+      for (let i = 0; i < candidates.length; i++) {
+        if (usedIndices.has(i)) continue;
+        const cText = cleanKoreanLemma(candidates[i].text || '');
+        if (!cText || cText.length > subTarget.length) continue;
+
+        if (cText === subTarget) {
+          const res = [resolvePart(candidates[i])];
+          if (!bestSub || res.length > bestSub.length) {
+            bestSub = res;
+          }
+        } else if (subTarget.startsWith(cText)) {
+          const rem = subTarget.slice(cText.length);
+          const nextUsed = new Set(usedIndices);
+          nextUsed.add(i);
+          const subResult = searchChain(rem, nextUsed, depth + 1);
+          if (subResult && subResult.length > 0) {
+            const res = [resolvePart(candidates[i]), ...subResult];
+            if (!bestSub || res.length > bestSub.length) {
+              bestSub = res;
             }
           }
-          return {
-            part1,
-            part2: match2,
-            target: cleanTarget
-          };
+        }
+      }
+      return bestSub;
+    }
+
+    let bestChain = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const c1Text = cleanKoreanLemma(candidates[i].text || '');
+      if (!c1Text || c1Text === cleanTarget || c1Text.length >= cleanTarget.length) continue;
+      if (cleanTarget.startsWith(c1Text)) {
+        const rem = cleanTarget.slice(c1Text.length);
+        const used = new Set([i]);
+        const rest = searchChain(rem, used, 1);
+        if (rest && rest.length > 0) {
+          const chain = [resolvePart(candidates[i]), ...rest];
+          if (!bestChain || chain.length > bestChain.length) {
+            bestChain = chain;
+          }
         }
       }
     }
+
+    if (bestChain && bestChain.length >= 2) {
+      return {
+        parts: bestChain,
+        part1: bestChain[0],
+        part2: bestChain[1],
+        target: cleanTarget
+      };
+    }
     return null;
+  }
+
+  function findCompoundPair(candidates, targetWord) {
+    return findCompoundChain(candidates, targetWord);
   }
 
   function renderTooltip(state, sentenceAnalysisCache, onMouseEnter, onMouseLeave, onClick) {
@@ -193,32 +239,38 @@
       return `<button type="button" class="chip" data-candidate="${escapeHtml(c.text)}" style="cursor: pointer; border: ${borderStyle}; background: ${bgStyle}; color: ${colorStyle}; padding: 4px 10px; border-radius: 8px; font-weight: 600; font-size: 0.88em; display: inline-flex; align-items: center; transition: all 0.15s ease;" title="${isLlmFallback ? 'No local dictionary entry (Click for Quick LLM Lookup)' : 'Local Dictionary Entry Available'}">${escapeHtml(c.text)}${badgeHtml}</button>`;
     };
 
-    const compoundPair = findCompoundPair(primaryCandidates, state.originalHoverWord || state.word);
+    const compoundPair = findCompoundChain(primaryCandidates, state.originalHoverWord || state.word);
 
     let candidateChipsHtml = '';
     if (primaryCandidates.length > 0) {
-      if (compoundPair) {
-        const p1 = compoundPair.part1;
-        const p2 = compoundPair.part2;
+      if (compoundPair && Array.isArray(compoundPair.parts) && compoundPair.parts.length >= 2) {
+        const parts = compoundPair.parts;
+        const partTexts = new Set(parts.map(p => p.text));
         const groupHtml = `
-          <div class="compound-pill-group" style="display: inline-flex; align-items: center; background: #f0faf7; border: 1.5px solid #2f5d62; border-radius: 9px; padding: 2px 5px; gap: 3px;" title="Compound constituents: ${escapeHtml(p1.text)} + ${escapeHtml(p2.text)}">
+          <div class="compound-pill-group" style="display: inline-flex; align-items: center; background: #f0faf7; border: 1.5px solid #2f5d62; border-radius: 9px; padding: 2px 5px; gap: 3px;" title="Compound constituents: ${parts.map(p => escapeHtml(p.text)).join(' + ')}">
             <span style="font-size: 0.72em; font-weight: 800; color: #17383b; margin-right: 2px; margin-left: 2px;">🧩</span>
-            ${renderSingleChip(p1)}
-            <span style="font-weight: 800; color: #2f5d62; font-size: 0.9em; padding: 0 1px;">+</span>
-            ${renderSingleChip(p2)}
+            ${parts.map((p, idx) => `${idx > 0 ? `<span style="font-weight: 800; color: #2f5d62; font-size: 0.9em; padding: 0 1px;">+</span>` : ''}${renderSingleChip(p)}`).join('')}
           </div>
         `;
-        const others = primaryCandidates.filter(c => c.text !== p1.text && c.text !== p2.text).slice(0, 4);
+        const others = primaryCandidates.filter(c => !partTexts.has(c.text));
+        const activeOrInjected = others.filter(c => c.text === state.dictionaryMatch || c.isLlmInjected || c.reason?.includes('LLM Matched'));
+        const normalOthers = others.filter(c => c.text !== state.dictionaryMatch && !c.isLlmInjected && !c.reason?.includes('LLM Matched'));
+        const displayOthers = [...activeOrInjected, ...normalOthers].slice(0, 5);
+
         candidateChipsHtml = `
           <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;">
             ${groupHtml}
-            ${others.map(renderSingleChip).join('')}
+            ${displayOthers.map(renderSingleChip).join('')}
           </div>
         `;
       } else {
+        const activeOrInjected = primaryCandidates.filter(c => c.text === state.dictionaryMatch || c.isLlmInjected || c.reason?.includes('LLM Matched'));
+        const normalPrimary = primaryCandidates.filter(c => c.text !== state.dictionaryMatch && !c.isLlmInjected && !c.reason?.includes('LLM Matched'));
+        const displayPrimary = [...activeOrInjected, ...normalPrimary].slice(0, 7);
+
         candidateChipsHtml = `
           <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px;">
-            ${primaryCandidates.slice(0, 6).map(renderSingleChip).join('')}
+            ${displayPrimary.map(renderSingleChip).join('')}
           </div>
         `;
       }
@@ -235,19 +287,21 @@
     const iconUrl = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL('assets/icon32.png') : '';
     const iconHtml = iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="Munmek" style="width: 24px; height: 24px; margin-right: 8px; vertical-align: middle; display: inline-block; object-fit: contain;">` : '';
 
+    const feedbackToastHtml = (state.feedback && !state.isAiLoading) ? `
+      <div class="toast-feedback ${state.feedbackType === 'error' ? 'toast-error' : (state.feedbackType === 'success' ? 'toast-success' : 'toast-info')}" role="status" aria-live="polite" style="margin: 6px 0 10px 0; padding: 8px 12px; border-radius: 8px; font-weight: 700; font-size: 0.88em; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); background: ${state.feedbackType === 'error' ? '#fee2e2' : (state.feedbackType === 'success' ? '#dcfce7' : '#f0f9ff')}; color: ${state.feedbackType === 'error' ? '#991b1b' : (state.feedbackType === 'success' ? '#166534' : '#0369a1')}; border: 1.5px solid ${state.feedbackType === 'error' ? '#ef4444' : (state.feedbackType === 'success' ? '#22c55e' : '#38bdf8')};">
+        <span style="font-size: 1.2em;">${state.feedbackType === 'error' ? '⚠️' : (state.feedbackType === 'success' ? '✅' : 'ℹ️')}</span>
+        <span>${escapeHtml(state.feedback)}</span>
+      </div>
+    ` : '';
+
     const html = [
       `<div class="title" style="display: flex; align-items: center; gap: 6px;">${iconHtml}<span>${escapeHtml(state.word || '...')}</span></div>`,
+      feedbackToastHtml,
       dictHtml,
       candidateChipsHtml,
       state.sentence ? `<div class="subtitle"><strong>Sentence:</strong> ${escapeHtml(truncateText(state.sentence, 180))}</div>` : '',
       renderActions(state, Boolean(analysis)),
-      renderAnalysisSection(analysis, state),
-      (state.feedback && !state.isAiLoading) ? `
-        <div class="toast-feedback ${state.feedbackType === 'error' ? 'toast-error' : (state.feedbackType === 'success' ? 'toast-success' : 'toast-info')}" role="status" aria-live="polite" style="margin-top: 10px; padding: 10px 14px; border-radius: 8px; font-weight: 700; font-size: 0.88em; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); background: ${state.feedbackType === 'error' ? '#fee2e2' : (state.feedbackType === 'success' ? '#dcfce7' : '#f0f9ff')}; color: ${state.feedbackType === 'error' ? '#991b1b' : (state.feedbackType === 'success' ? '#166534' : '#0369a1')}; border: 1.5px solid ${state.feedbackType === 'error' ? '#ef4444' : (state.feedbackType === 'success' ? '#22c55e' : '#38bdf8')};">
-          <span style="font-size: 1.2em;">${state.feedbackType === 'error' ? '⚠️' : (state.feedbackType === 'success' ? '✅' : 'ℹ️')}</span>
-          <span>${escapeHtml(state.feedback)}</span>
-        </div>
-      ` : ''
+      renderAnalysisSection(analysis, state)
     ].filter(Boolean).join('');
 
     const tooltipDictGroups = Array.isArray(state?.dictionaryEntries) ? groupEntriesByDictTitle(state.dictionaryEntries) : [];
@@ -1430,7 +1484,7 @@
     if (cleaned.endsWith('다') && cleaned.length >= 2) {
       return cleaned;
     }
-    return cleaned.replace(/(이나마|에게서|에서는|이라도|이든지|만큼|대로|같이|처럼|밖에|이나|이란|이라|이야|까지|부터|보다|마다|조차|커녕|에서|에게|은|는|이|가|을|를|의|에|와|과|도|만|으로|로)$/, '') || cleaned;
+    return cleaned.replace(/(이나마|에게서|에서는|에게도|한테도|이라도|이든지|만큼|대로|같이|처럼|밖에|이나|이란|이라|이야|까지|부터|보다|마다|조차|커녕|에서|에게|은|는|이|가|을|를|의|에|와|과|도|만|으로|로)$/, '') || cleaned;
   }
 
   function positionTooltip(x, y, fontSize = 15) {
@@ -1496,7 +1550,8 @@
     getLlmResponseLanguage,
     renderActions,
     renderDictionaryEntriesGrouped,
-    findCompoundPair
+    findCompoundPair,
+    findCompoundChain
   };
 
   const targetGlobal = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : global);

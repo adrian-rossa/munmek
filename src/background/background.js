@@ -1401,7 +1401,12 @@ async function resolveNetflixTmdbContext(netflixData, config) {
       ? `Episode (S${seasonNumber}E${episodeNumber}): ${netflixData.episodeTitle || ''}`
       : (netflixData.episodeTitle ? `Episode: ${netflixData.episodeTitle}` : '');
     if (epHeader) parts.push(epHeader);
-    parts.push(`Synopsis: ${netflixData.synopsis}`);
+    if (netflixData.showSynopsis && netflixData.episodeSynopsis) {
+      parts.push(`Show Premise: ${netflixData.showSynopsis}`);
+      parts.push(`Episode Synopsis: ${netflixData.episodeSynopsis}`);
+    } else {
+      parts.push(`Synopsis: ${netflixData.synopsis}`);
+    }
     if (netflixData.subtitles) {
       parts.push(`Recent Dialogue: ${netflixData.subtitles}`);
     }
@@ -1425,7 +1430,11 @@ async function resolveNetflixTmdbContext(netflixData, config) {
 
   // 1. Check local cache
   const cachedMap = await new Promise((resolve) => {
-    chrome.storage.local.get(['netflixTmdbMap'], (res) => resolve(res.netflixTmdbMap || {}));
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      chrome.storage.local.get(['netflixTmdbMap'], (res) => resolve(res.netflixTmdbMap || {}));
+    } else {
+      resolve({});
+    }
   });
 
   let matchInfo = netflixId ? cachedMap[netflixId] : null;
@@ -1442,7 +1451,7 @@ async function resolveNetflixTmdbContext(netflixData, config) {
         mediaType: searchMatch.media_type || (searchMatch.first_air_date ? 'tv' : 'movie'),
         title: searchMatch.title || searchMatch.name || title
       };
-      if (netflixId) {
+      if (netflixId && typeof chrome !== 'undefined' && chrome.storage?.local) {
         cachedMap[netflixId] = matchInfo;
         chrome.storage.local.set({ netflixTmdbMap: cachedMap });
       }
@@ -1461,7 +1470,7 @@ async function resolveNetflixTmdbContext(netflixData, config) {
     const parts = [];
     const showTitle = showDetails?.title || showDetails?.name || matchInfo.title || title;
     if (showDetails?.overview) {
-      parts.push(`Show Overview: ${showDetails.overview}`);
+      parts.push(`Show Premise: ${showDetails.overview}`);
     } else if (netflixData?.synopsis) {
       parts.push(`Netflix Synopsis: ${netflixData.synopsis}`);
     }
@@ -1789,12 +1798,15 @@ async function summarizeMediaContext({ siteType, title, rawText }, config) {
     return 'No webpage content extracted yet. Click Refresh Context to scan page.';
   }
 
-  const promptText = `Provide a concise 2-3 sentence situational context (<80 words) for Korean language study based on the following text:
+  const hasEpisodeContext = /Episode\s*\([^\)]+\):?/i.test(cleanInput);
+  const promptText = `Provide a concise 2-3 sentence situational context (<90 words) for Korean language study based on the following text:
 
 ${cleanInput}
 
 Guidelines:
-- Describe strictly what is happening, who is speaking or interacting, the core topic, and practical vocabulary themes.
+${hasEpisodeContext
+  ? `- State the general show premise in 1 concise sentence, followed by 1-2 concise sentences summarizing the specific situation and events of this episode.`
+  : `- Describe strictly what is happening, who is speaking or interacting, the core topic, and practical vocabulary themes.`}
 - Do NOT write meta phrases like "This video", "This webpage", "This article", or "This show". Output ONLY the 2-3 sentence situational summary.`;
 
   const systemInstruction = 'You are a concise language learning assistant. Summarize the situational context in 2-3 concise English sentences without mentioning the media format.';
