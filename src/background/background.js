@@ -1393,7 +1393,76 @@ async function resolveNetflixTmdbContext(netflixData, config) {
     }
   }
 
-  // 0b. If direct synopsis was extracted from Netflix DOM / metadata, use it directly!
+  // 1. If TMDB API key is configured, PRIORITIZE TMDB for rich show overview + episode-specific details
+  if (tmdbApiKey && title && !/^netflix$|^netflix video$/i.test(title)) {
+    const cachedMap = await new Promise((resolve) => {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        chrome.storage.local.get(['netflixTmdbMap'], (res) => resolve(res.netflixTmdbMap || {}));
+      } else {
+        resolve({});
+      }
+    });
+
+    let matchInfo = netflixId ? cachedMap[netflixId] : null;
+    if (!matchInfo && cachedMap[title]) {
+      matchInfo = cachedMap[title];
+    }
+
+    if (!matchInfo) {
+      const searchMatch = await searchTmdbShowOrMovie(title, releaseYear, tmdbApiKey);
+      if (searchMatch) {
+        matchInfo = {
+          tmdbId: searchMatch.id,
+          mediaType: searchMatch.media_type || (searchMatch.first_air_date ? 'tv' : 'movie'),
+          title: searchMatch.title || searchMatch.name || title
+        };
+        if (netflixId && typeof chrome !== 'undefined' && chrome.storage?.local) {
+          cachedMap[netflixId] = matchInfo;
+          chrome.storage.local.set({ netflixTmdbMap: cachedMap });
+        }
+      }
+    }
+
+    if (matchInfo && matchInfo.tmdbId) {
+      const { showDetails, episodeDetails } = await fetchTmdbDetails(
+        matchInfo.tmdbId,
+        matchInfo.mediaType,
+        seasonNumber,
+        episodeNumber,
+        tmdbApiKey
+      );
+
+      const parts = [];
+      const showTitle = showDetails?.title || showDetails?.name || matchInfo.title || title;
+      const showPremise = showDetails?.overview || netflixData?.showSynopsis || netflixData?.synopsis || '';
+      if (showPremise) {
+        parts.push(`Show Premise: ${showPremise}`);
+      }
+
+      const epName = episodeDetails?.name || netflixData?.episodeTitle || '';
+      const epPlot = episodeDetails?.overview || netflixData?.episodeSynopsis || '';
+      if (seasonNumber && episodeNumber) {
+        const epHeader = `Episode (S${seasonNumber}E${episodeNumber}${epName ? ` - ${epName}` : ''})`;
+        parts.push(`${epHeader}: ${epPlot || 'No episode synopsis available.'}`);
+      } else if (epName || epPlot) {
+        parts.push(`Episode (${epName || ''}): ${epPlot || ''}`.trim());
+      }
+
+      if (netflixData?.subtitles) {
+        parts.push(`Recent Dialogue: ${netflixData.subtitles}`);
+      }
+
+      const resolved = {
+        title: `${showTitle}${seasonNumber && episodeNumber ? ` S${seasonNumber}E${episodeNumber}` : ''}`,
+        rawText: parts.join('\n\n') || `${showTitle} ${netflixData?.subtitles || ''}`,
+        tmdbMatched: true
+      };
+      console.log('[Munmek TMDB] Successfully resolved TMDB context with episode details:', resolved);
+      return resolved;
+    }
+  }
+
+  // 2. Direct Netflix synopsis fallback (when no TMDB API key or TMDB had no match)
   if (netflixData?.hasDirectSynopsis && netflixData?.synopsis) {
     const parts = [];
     const showTitle = title || 'Netflix Video';
@@ -1415,79 +1484,7 @@ async function resolveNetflixTmdbContext(netflixData, config) {
       rawText: parts.join('\n\n'),
       directSynopsisMatched: true
     };
-    console.log('[Munmek Netflix] Resolved via direct Netflix synopsis:', resolved);
-    return resolved;
-  }
-
-  if (!tmdbApiKey) {
-    console.log('[Munmek TMDB] No TMDB API key configured in extension settings.');
-    return {
-      title: title || 'Netflix Video',
-      rawText: `${title || 'Netflix'} ${netflixData?.subtitles || ''} ${netflixData?.pageDetails || ''}`.trim(),
-      noTmdbKey: true
-    };
-  }
-
-  // 1. Check local cache
-  const cachedMap = await new Promise((resolve) => {
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      chrome.storage.local.get(['netflixTmdbMap'], (res) => resolve(res.netflixTmdbMap || {}));
-    } else {
-      resolve({});
-    }
-  });
-
-  let matchInfo = netflixId ? cachedMap[netflixId] : null;
-  if (!matchInfo && title && cachedMap[title]) {
-    matchInfo = cachedMap[title];
-  }
-
-  // 2. Search TMDB if not in cache
-  if (!matchInfo) {
-    const searchMatch = await searchTmdbShowOrMovie(title, releaseYear, tmdbApiKey);
-    if (searchMatch) {
-      matchInfo = {
-        tmdbId: searchMatch.id,
-        mediaType: searchMatch.media_type || (searchMatch.first_air_date ? 'tv' : 'movie'),
-        title: searchMatch.title || searchMatch.name || title
-      };
-      if (netflixId && typeof chrome !== 'undefined' && chrome.storage?.local) {
-        cachedMap[netflixId] = matchInfo;
-        chrome.storage.local.set({ netflixTmdbMap: cachedMap });
-      }
-    }
-  }
-
-  if (matchInfo && matchInfo.tmdbId) {
-    const { showDetails, episodeDetails } = await fetchTmdbDetails(
-      matchInfo.tmdbId,
-      matchInfo.mediaType,
-      seasonNumber,
-      episodeNumber,
-      tmdbApiKey
-    );
-
-    const parts = [];
-    const showTitle = showDetails?.title || showDetails?.name || matchInfo.title || title;
-    if (showDetails?.overview) {
-      parts.push(`Show Premise: ${showDetails.overview}`);
-    } else if (netflixData?.synopsis) {
-      parts.push(`Netflix Synopsis: ${netflixData.synopsis}`);
-    }
-    if (episodeDetails?.name || episodeDetails?.overview) {
-      const epHeader = `Episode (S${seasonNumber || 1}E${episodeNumber || 1}): ${episodeDetails.name || ''}`;
-      parts.push(`${epHeader}\n${episodeDetails.overview || ''}`);
-    }
-    if (netflixData?.subtitles) {
-      parts.push(`Recent Dialogue: ${netflixData.subtitles}`);
-    }
-
-    const resolved = {
-      title: `${showTitle}${seasonNumber && episodeNumber ? ` S${seasonNumber}E${episodeNumber}` : ''}`,
-      rawText: parts.join('\n\n') || `${showTitle} ${netflixData?.subtitles || ''}`,
-      tmdbMatched: true
-    };
-    console.log('[Munmek TMDB] Successfully resolved TMDB context:', resolved);
+    console.log('[Munmek Netflix] Resolved via direct Netflix synopsis fallback:', resolved);
     return resolved;
   }
 

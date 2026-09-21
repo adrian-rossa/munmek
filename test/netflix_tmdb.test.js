@@ -143,7 +143,7 @@ describe('Netflix & TMDB Context Resolution', () => {
       vi.restoreAllMocks();
     });
 
-    it('uses direct Netflix synopsis when available without needing TMDB call', async () => {
+    it('uses direct Netflix synopsis fallback when TMDB key is not configured', async () => {
       const netflixData = {
         title: 'Gokusen',
         netflixId: '80012345',
@@ -155,12 +155,63 @@ describe('Netflix & TMDB Context Resolution', () => {
         subtitles: '선생님 오셨어요.'
       };
 
-      const res = await resolveNetflixTmdbContext(netflixData, { tmdbApiKey: 'key' });
+      const res = await resolveNetflixTmdbContext(netflixData, { tmdbApiKey: '' });
       expect(res.directSynopsisMatched).toBe(true);
       expect(res.title).toBe('Gokusen S1E1');
       expect(res.rawText).toContain('Synopsis: A young teacher joins Shirokin High School.');
       expect(res.rawText).toContain('Episode (S1E1): Episode 1');
       expect(res.rawText).toContain('Recent Dialogue: 선생님 오셨어요.');
+    });
+
+    it('prioritizes TMDB for show premise and episode plot when TMDB key is configured', async () => {
+      const showDetails = {
+        name: 'Avatar: The Last Airbender',
+        overview: 'A boy revealed to be an avatar seeks to save a war-torn world.'
+      };
+      const epDetails = {
+        name: 'The Avatar Returns',
+        overview: 'Prince Zuko attacks the Southern Water Tribe searching for the Avatar.'
+      };
+
+      globalThis.fetch = vi.fn().mockImplementation((url) => {
+        if (url.includes('search/tv') || url.includes('search/multi')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              results: [{ id: 1234, name: 'Avatar: The Last Airbender', media_type: 'tv' }]
+            })
+          });
+        }
+        if (url.includes('/tv/1234/season/1/episode/2')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(epDetails)
+          });
+        }
+        if (url.includes('/tv/1234')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(showDetails)
+          });
+        }
+        return Promise.reject(new Error('Unknown URL: ' + url));
+      });
+
+      const netflixData = {
+        title: '아바타: 아앙의 전설',
+        seasonNumber: 1,
+        episodeNumber: 2,
+        synopsis: 'Direct generic Netflix show synopsis',
+        hasDirectSynopsis: true,
+        subtitles: '절대 전함을 따라잡을 수 없어.'
+      };
+
+      const res = await resolveNetflixTmdbContext(netflixData, { tmdbApiKey: 'tmdb_secret' });
+      expect(res.tmdbMatched).toBe(true);
+      expect(res.title).toContain('Avatar: The Last Airbender S1E2');
+      expect(res.rawText).toContain('Show Premise: A boy revealed to be an avatar seeks to save a war-torn world.');
+      expect(res.rawText).toContain('Episode (S1E2 - The Avatar Returns): Prince Zuko attacks the Southern Water Tribe searching for the Avatar.');
+      expect(res.rawText).toContain('Recent Dialogue: 절대 전함을 따라잡을 수 없어.');
     });
 
     it('recovers title and synopsis by fetching netflix.com/title when title is initially missing', async () => {

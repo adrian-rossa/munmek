@@ -673,6 +673,63 @@ Return JSON with "words_analysis": [{
       expect(tooltip.innerHTML).toContain('data-candidate="따라잡다"');
       expect(tooltip.innerHTML).toContain('data-candidate="잡다"');
     });
+
+    it('rejects pseudo-compound (놓으 + 세요) for inflected verb 놓으세요', () => {
+      const candidates = [
+        { text: '놓다', posHint: 'verb', score: 95, reason: 'polite imperative verb (-(으)세요)' },
+        { text: '놓으', posHint: 'noun/stem', score: 65, reason: 'prefix subword (놓으)' },
+        { text: '세요', posHint: 'noun/stem', score: 60, reason: 'suffix subword (세요)' },
+        { text: '놓으세다', posHint: 'verb', score: 50 },
+        { text: '놓으다', posHint: 'verb', score: 45 }
+      ];
+
+      const state = {
+        word: '놓다',
+        originalHoverWord: '놓으세요',
+        dictionaryMatch: '놓다',
+        verifiedDictionaryCandidates: new Set(['놓다'])
+      };
+
+      const compound = MunmekUI.findCompoundChain(candidates, '놓으세요', state);
+      // Because 놓으세요 is directly explained by lemma 놓다, and 놓으/세요 are arbitrary subwords,
+      // findCompoundChain MUST return null
+      expect(compound).toBeNull();
+    });
+
+    it('does not label unverified heuristic subword slices as 명사 in candidate chips', () => {
+      document.body.innerHTML = '';
+      const state = {
+        word: '놓다',
+        originalHoverWord: '놓으세요',
+        dictionaryMatch: '놓다',
+        candidateList: [
+          { text: '놓다', posHint: 'verb', score: 95 },
+          { text: '놓으', posHint: 'noun/stem', score: 65, reason: 'prefix subword (놓으)' },
+          { text: '세요', posHint: 'noun/stem', score: 60, reason: 'suffix subword (세요)' }
+        ],
+        verifiedDictionaryCandidates: new Set(['놓다']),
+        dictionaryEntries: [{ surface: '놓다', pos: '동사', definitions: ['put, place'] }]
+      };
+
+      MunmekUI.renderTooltip(state, new Map(), () => {}, () => {}, () => {});
+      const tooltip = document.getElementById('munmek-lookup-tooltip');
+      expect(tooltip).not.toBeNull();
+      const html = tooltip.innerHTML;
+
+      // 놓다 is badged as 동사
+      expect(html).toContain('data-candidate="놓다"');
+      expect(html).toContain('동사');
+
+      // 놓으 and 세요 subword chips MUST NOT be badged as 명사
+      // Locate the chip for 놓으
+      const noheuChip = html.match(/<button[^>]*data-candidate="놓으"[^>]*>([\s\S]*?)<\/button>/);
+      expect(noheuChip).not.toBeNull();
+      expect(noheuChip[1]).not.toContain('명사');
+
+      const seyoChip = html.match(/<button[^>]*data-candidate="세요"[^>]*>([\s\S]*?)<\/button>/);
+      expect(seyoChip).not.toBeNull();
+      expect(seyoChip[1]).not.toContain('명사');
+    });
   });
 });
 

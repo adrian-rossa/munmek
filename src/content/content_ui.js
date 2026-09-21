@@ -64,35 +64,106 @@
     return null;
   }
 
-  function findCompoundChain(candidates, targetWord) {
+  const KNOWN_PARTICLES = new Set([
+    '은', '는', '이', '가', '을', '를', '에', '에서', '에게', '한테', '께', '으로', '로',
+    '와', '과', '도', '만', '까지', '부터', '보다', '처럼', '같이', '마다', '조차',
+    '밖에', '이나', '나', '이란', '란', '이라', '라', '이야', '야', '이라도', '라도',
+    '에게도', '한테도', '에서도', '에는', '에서는', '에게는', '한테는', '에의', '으로의', '다'
+  ]);
+
+  const KNOWN_GRAMMAR_ENDINGS = new Set([
+    '지', '고', '며', '면', '으면', '어서', '아서', '여서', '려고', '으려고',
+    '게', '도록', '는데', '은데', 'ㄴ데', '던', 'ㄹ', '을', 'ㄴ', '은', '는'
+  ]);
+
+  function findCompoundChain(candidates, targetWord, state = null) {
     if (!candidates || !Array.isArray(candidates) || !targetWord) return null;
     const cleanTarget = cleanKoreanLemma(targetWord);
     if (cleanTarget.length < 2) return null;
 
+    // If the target word is already directly explained by a high-confidence inflected verb/adjective lemma
+    // (e.g. 놓다 from 놓으세요, 먹다 from 먹어요), prevent pseudo-compound slicing of its inflectional syllables (e.g. 놓으 + 세요).
+    const hasConjugatedVerbLemma = candidates.some(c => {
+      const cText = cleanKoreanLemma(c.text || '');
+      if (cText === cleanTarget) return false;
+      if (c.posHint === 'verb' || c.posHint === 'adjective' || c.posHint === 'verb/adjective') {
+        const r = c.reason || '';
+        if (c.score >= 80 && /honorific|polite|past tense|progressive|connective|imperative|Kiwi verb/i.test(r)) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    function isEligibleConstituent(cand, isPart1 = false) {
+      if (!cand) return false;
+      const cText = cleanKoreanLemma(cand.text || '');
+      if (!cText) return false;
+
+      // Non-subword candidates (exact matches, dictionary words, lemmatizer results, Kiwi tokens)
+      if (!cand.reason || !/subword/i.test(cand.reason)) {
+        if (cand.posHint === 'particle' || KNOWN_PARTICLES.has(cText)) {
+          return !isPart1 || cText.length >= 2;
+        }
+        if (cand.posHint === 'grammar' || KNOWN_GRAMMAR_ENDINGS.has(cText)) {
+          return !isPart1;
+        }
+        return true;
+      }
+
+      // Particles and recognized grammar endings are always eligible
+      if (cand.posHint === 'particle' || KNOWN_PARTICLES.has(cText)) return !isPart1 || cText.length >= 2;
+      if (cand.posHint === 'grammar' || KNOWN_GRAMMAR_ENDINGS.has(cText)) return !isPart1;
+
+      // Verb or adjective stems/citations
+      if (cand.posHint === 'verb' || cand.posHint === 'adjective' || cand.posHint === 'verb/stem' || cand.posHint === 'adjective/stem') {
+        return true;
+      }
+
+      // Kiwi morphological tokens
+      if (/^Kiwi (?:noun|verb|adjective|particle|grammar)/i.test(cand.reason || '')) {
+        return true;
+      }
+
+      // Disqualify verbal/stem fragments ending in inflection vowels like '으', '아', '어', '여'
+      if (/[으아어여]$/.test(cText)) return false;
+
+      // Verified in local dictionary
+      if (state?.verifiedDictionaryCandidates) {
+        return state.verifiedDictionaryCandidates.has(cText);
+      }
+
+      // In unverified fallback mode, only allow substantive nouns of length >= 2
+      return cand.posHint === 'noun' && cText.length >= 2;
+    }
+
     function resolvePart(cand) {
       const candText = cleanKoreanLemma(cand.text || '');
       const isVerbAdjStem = (cand.posHint === 'verb/stem' || cand.posHint === 'adjective/stem' ||
-        /^Kiwi (?:verb|adjective|auxiliary) stem/i.test(cand.reason || ''));
-      if (isVerbAdjStem) {
-        const citationMatch = candidates.find(c => c.text === candText + '다');
-        if (citationMatch) return citationMatch;
-        return { ...cand, text: candText + '다', posHint: cand.posHint?.replace('/stem', '') || 'verb' };
+        cand.reason?.includes('verb stem') || cand.reason?.includes('adjective stem'));
+      if (isVerbAdjStem && !candText.endsWith('다')) {
+        const citation = candidates.find(c => {
+          const t = cleanKoreanLemma(c.text || '');
+          return t === candText + '다' && (c.posHint === 'verb' || c.posHint === 'adjective' || c.score >= cand.score);
+        });
+        if (citation) return citation;
       }
       return cand;
     }
 
     function searchChain(subTarget, usedIndices, depth) {
-      if (!subTarget) return [];
-      if (depth > 4) return null;
-
+      if (!subTarget || depth > 4) return null;
       let bestSub = null;
       for (let i = 0; i < candidates.length; i++) {
         if (usedIndices.has(i)) continue;
-        const cText = cleanKoreanLemma(candidates[i].text || '');
+        const cand = candidates[i];
+        if (!isEligibleConstituent(cand, false)) continue;
+
+        const cText = cleanKoreanLemma(cand.text || '');
         if (!cText || cText.length > subTarget.length) continue;
 
         if (cText === subTarget) {
-          const res = [resolvePart(candidates[i])];
+          const res = [resolvePart(cand)];
           if (!bestSub || res.length > bestSub.length) {
             bestSub = res;
           }
@@ -102,7 +173,7 @@
           nextUsed.add(i);
           const subResult = searchChain(rem, nextUsed, depth + 1);
           if (subResult && subResult.length > 0) {
-            const res = [resolvePart(candidates[i]), ...subResult];
+            const res = [resolvePart(cand), ...subResult];
             if (!bestSub || res.length > bestSub.length) {
               bestSub = res;
             }
@@ -114,14 +185,25 @@
 
     let bestChain = null;
     for (let i = 0; i < candidates.length; i++) {
-      const c1Text = cleanKoreanLemma(candidates[i].text || '');
+      const cand1 = candidates[i];
+      if (!isEligibleConstituent(cand1, true)) continue;
+
+      const c1Text = cleanKoreanLemma(cand1.text || '');
       if (!c1Text || c1Text === cleanTarget || c1Text.length >= cleanTarget.length) continue;
+
+      // If target word is an inflected verb/adjective (like 놓으세요), part1 must be a verb stem/citation,
+      // and not an arbitrary pseudo-noun slice (like 놓으)
+      if (hasConjugatedVerbLemma) {
+        const isPart1Verb = (cand1.posHint === 'verb' || cand1.posHint === 'verb/stem') || /^Kiwi (?:verb|auxiliary)/i.test(cand1.reason || '');
+        if (!isPart1Verb) continue;
+      }
+
       if (cleanTarget.startsWith(c1Text)) {
         const rem = cleanTarget.slice(c1Text.length);
         const used = new Set([i]);
         const rest = searchChain(rem, used, 1);
         if (rest && rest.length > 0) {
-          const chain = [resolvePart(candidates[i]), ...rest];
+          const chain = [resolvePart(cand1), ...rest];
           if (!bestChain || chain.length > bestChain.length) {
             bestChain = chain;
           }
@@ -140,8 +222,8 @@
     return null;
   }
 
-  function findCompoundPair(candidates, targetWord) {
-    return findCompoundChain(candidates, targetWord);
+  function findCompoundPair(candidates, targetWord, state = null) {
+    return findCompoundChain(candidates, targetWord, state);
   }
 
   function renderTooltip(state, sentenceAnalysisCache, onMouseEnter, onMouseLeave, onClick) {
@@ -214,7 +296,7 @@
       } else if (c.posHint === 'adjective' || c.posHint?.startsWith('adjective')) {
         badgeText = '형용사';
         badgeBg = '#fce7f3';
-      } else if (c.posHint === 'noun' || c.posHint === 'noun/stem' || c.reason?.includes('noun') || c.reason?.includes('removed')) {
+      } else if (c.posHint === 'noun' || (!c.reason?.includes('subword') && c.posHint === 'noun/stem') || (!c.reason?.includes('subword') && c.reason?.includes('noun')) || c.reason?.includes('removed')) {
         badgeText = '명사';
         badgeBg = '#f3f4f6';
       } else if (isLlmFallback) {
@@ -239,7 +321,7 @@
       return `<button type="button" class="chip" data-candidate="${escapeHtml(c.text)}" style="cursor: pointer; border: ${borderStyle}; background: ${bgStyle}; color: ${colorStyle}; padding: 4px 10px; border-radius: 8px; font-weight: 600; font-size: 0.88em; display: inline-flex; align-items: center; transition: all 0.15s ease;" title="${isLlmFallback ? 'No local dictionary entry (Click for Quick LLM Lookup)' : 'Local Dictionary Entry Available'}">${escapeHtml(c.text)}${badgeHtml}</button>`;
     };
 
-    const compoundPair = findCompoundChain(primaryCandidates, state.originalHoverWord || state.word);
+    const compoundPair = findCompoundChain(primaryCandidates, state.originalHoverWord || state.word, state);
 
     let candidateChipsHtml = '';
     if (primaryCandidates.length > 0) {
