@@ -53,9 +53,6 @@
     if (matchKey && cache.has(`${matchKey}__${langKey}`)) {
       return cache.get(`${matchKey}__${langKey}`);
     }
-    if (cache.has(langKey)) {
-      return cache.get(langKey);
-    }
 
     if (wordKey && cache.has(`${wordKey}__${sentenceKey}`)) {
       return cache.get(`${wordKey}__${sentenceKey}`);
@@ -64,21 +61,169 @@
       return cache.get(`${matchKey}__${sentenceKey}`);
     }
 
-    const sentenceCached = cache.get(sentenceKey);
-    if (sentenceCached) {
-      const wordsAnalysis = Array.isArray(sentenceCached.words_analysis)
-        ? sentenceCached.words_analysis
-        : (Array.isArray(sentenceCached.words) ? sentenceCached.words : (Array.isArray(sentenceCached.analysis) ? sentenceCached.analysis : null));
-      if (Array.isArray(wordsAnalysis) && wordsAnalysis.length > 0) {
-        const item = wordsAnalysis.find((w) => {
-          const s = cleanKoreanWord(w.surface || w.word || '');
-          const b = cleanKoreanWord(w.base || '');
-          return (s && (s === wordKey || s === matchKey)) || (b && (b === wordKey || b === matchKey));
+    return null;
+  }
+
+  const KNOWN_PARTICLES = new Set([
+    '은', '는', '이', '가', '을', '를', '에', '에서', '에게', '한테', '께', '으로', '로',
+    '와', '과', '도', '만', '까지', '부터', '보다', '처럼', '같이', '마다', '조차',
+    '밖에', '이나', '나', '이란', '란', '이라', '라', '이야', '야', '이라도', '라도',
+    '에게도', '한테도', '에서도', '에는', '에서는', '에게는', '한테는', '에의', '으로의', '다'
+  ]);
+
+  const KNOWN_GRAMMAR_ENDINGS = new Set([
+    '지', '고', '며', '면', '으면', '어서', '아서', '여서', '려고', '으려고',
+    '게', '도록', '는데', '은데', 'ㄴ데', '던', 'ㄹ', '을', 'ㄴ', '은', '는'
+  ]);
+
+  function findCompoundChain(candidates, targetWord, state = null) {
+    if (!candidates || !Array.isArray(candidates) || !targetWord) return null;
+    const cleanTarget = cleanKoreanLemma(targetWord);
+    if (cleanTarget.length < 2) return null;
+
+    // If the target word is already directly explained by a high-confidence inflected verb/adjective lemma
+    // (e.g. 놓다 from 놓으세요, 먹다 from 먹어요), prevent pseudo-compound slicing of its inflectional syllables (e.g. 놓으 + 세요).
+    const hasConjugatedVerbLemma = candidates.some(c => {
+      const cText = cleanKoreanLemma(c.text || '');
+      if (cText === cleanTarget) return false;
+      if (c.posHint === 'verb' || c.posHint === 'adjective' || c.posHint === 'verb/adjective') {
+        const r = c.reason || '';
+        if (c.score >= 80 && /honorific|polite|past tense|progressive|connective|imperative|Kiwi verb/i.test(r)) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    function isEligibleConstituent(cand, isPart1 = false) {
+      if (!cand) return false;
+      const cText = cleanKoreanLemma(cand.text || '');
+      if (!cText) return false;
+
+      // Non-subword candidates (exact matches, dictionary words, lemmatizer results, Kiwi tokens)
+      if (!cand.reason || !/subword/i.test(cand.reason)) {
+        if (cand.posHint === 'particle' || KNOWN_PARTICLES.has(cText)) {
+          return !isPart1 || cText.length >= 2;
+        }
+        if (cand.posHint === 'grammar' || KNOWN_GRAMMAR_ENDINGS.has(cText)) {
+          return !isPart1;
+        }
+        return true;
+      }
+
+      // Particles and recognized grammar endings are always eligible
+      if (cand.posHint === 'particle' || KNOWN_PARTICLES.has(cText)) return !isPart1 || cText.length >= 2;
+      if (cand.posHint === 'grammar' || KNOWN_GRAMMAR_ENDINGS.has(cText)) return !isPart1;
+
+      // Verb or adjective stems/citations
+      if (cand.posHint === 'verb' || cand.posHint === 'adjective' || cand.posHint === 'verb/stem' || cand.posHint === 'adjective/stem') {
+        return true;
+      }
+
+      // Kiwi morphological tokens
+      if (/^Kiwi (?:noun|verb|adjective|particle|grammar)/i.test(cand.reason || '')) {
+        return true;
+      }
+
+      // Disqualify verbal/stem fragments ending in inflection vowels like '으', '아', '어', '여'
+      if (/[으아어여]$/.test(cText)) return false;
+
+      // Verified in local dictionary
+      if (state?.verifiedDictionaryCandidates) {
+        return state.verifiedDictionaryCandidates.has(cText);
+      }
+
+      // In unverified fallback mode, only allow substantive nouns of length >= 2
+      return cand.posHint === 'noun' && cText.length >= 2;
+    }
+
+    function resolvePart(cand) {
+      const candText = cleanKoreanLemma(cand.text || '');
+      const isVerbAdjStem = (cand.posHint === 'verb/stem' || cand.posHint === 'adjective/stem' ||
+        cand.reason?.includes('verb stem') || cand.reason?.includes('adjective stem'));
+      if (isVerbAdjStem && !candText.endsWith('다')) {
+        const citation = candidates.find(c => {
+          const t = cleanKoreanLemma(c.text || '');
+          return t === candText + '다' && (c.posHint === 'verb' || c.posHint === 'adjective' || c.score >= cand.score);
         });
-        if (item) return sentenceCached;
+        if (citation) return citation;
+      }
+      return cand;
+    }
+
+    function searchChain(subTarget, usedIndices, depth) {
+      if (!subTarget || depth > 4) return null;
+      let bestSub = null;
+      for (let i = 0; i < candidates.length; i++) {
+        if (usedIndices.has(i)) continue;
+        const cand = candidates[i];
+        if (!isEligibleConstituent(cand, false)) continue;
+
+        const cText = cleanKoreanLemma(cand.text || '');
+        if (!cText || cText.length > subTarget.length) continue;
+
+        if (cText === subTarget) {
+          const res = [resolvePart(cand)];
+          if (!bestSub || res.length > bestSub.length) {
+            bestSub = res;
+          }
+        } else if (subTarget.startsWith(cText)) {
+          const rem = subTarget.slice(cText.length);
+          const nextUsed = new Set(usedIndices);
+          nextUsed.add(i);
+          const subResult = searchChain(rem, nextUsed, depth + 1);
+          if (subResult && subResult.length > 0) {
+            const res = [resolvePart(cand), ...subResult];
+            if (!bestSub || res.length > bestSub.length) {
+              bestSub = res;
+            }
+          }
+        }
+      }
+      return bestSub;
+    }
+
+    let bestChain = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const cand1 = candidates[i];
+      if (!isEligibleConstituent(cand1, true)) continue;
+
+      const c1Text = cleanKoreanLemma(cand1.text || '');
+      if (!c1Text || c1Text === cleanTarget || c1Text.length >= cleanTarget.length) continue;
+
+      // If target word is an inflected verb/adjective (like 놓으세요), part1 must be a verb stem/citation,
+      // and not an arbitrary pseudo-noun slice (like 놓으)
+      if (hasConjugatedVerbLemma) {
+        const isPart1Verb = (cand1.posHint === 'verb' || cand1.posHint === 'verb/stem') || /^Kiwi (?:verb|auxiliary)/i.test(cand1.reason || '');
+        if (!isPart1Verb) continue;
+      }
+
+      if (cleanTarget.startsWith(c1Text)) {
+        const rem = cleanTarget.slice(c1Text.length);
+        const used = new Set([i]);
+        const rest = searchChain(rem, used, 1);
+        if (rest && rest.length > 0) {
+          const chain = [resolvePart(cand1), ...rest];
+          if (!bestChain || chain.length > bestChain.length) {
+            bestChain = chain;
+          }
+        }
       }
     }
+
+    if (bestChain && bestChain.length >= 2) {
+      return {
+        parts: bestChain,
+        part1: bestChain[0],
+        part2: bestChain[1],
+        target: cleanTarget
+      };
+    }
     return null;
+  }
+
+  function findCompoundPair(candidates, targetWord, state = null) {
+    return findCompoundChain(candidates, targetWord, state);
   }
 
   function renderTooltip(state, sentenceAnalysisCache, onMouseEnter, onMouseLeave, onClick) {
@@ -151,7 +296,7 @@
       } else if (c.posHint === 'adjective' || c.posHint?.startsWith('adjective')) {
         badgeText = '형용사';
         badgeBg = '#fce7f3';
-      } else if (c.posHint === 'noun' || c.posHint === 'noun/stem' || c.reason?.includes('noun') || c.reason?.includes('removed')) {
+      } else if (c.posHint === 'noun' || (!c.reason?.includes('subword') && c.posHint === 'noun/stem') || (!c.reason?.includes('subword') && c.reason?.includes('noun')) || c.reason?.includes('removed')) {
         badgeText = '명사';
         badgeBg = '#f3f4f6';
       } else if (isLlmFallback) {
@@ -176,13 +321,41 @@
       return `<button type="button" class="chip" data-candidate="${escapeHtml(c.text)}" style="cursor: pointer; border: ${borderStyle}; background: ${bgStyle}; color: ${colorStyle}; padding: 4px 10px; border-radius: 8px; font-weight: 600; font-size: 0.88em; display: inline-flex; align-items: center; transition: all 0.15s ease;" title="${isLlmFallback ? 'No local dictionary entry (Click for Quick LLM Lookup)' : 'Local Dictionary Entry Available'}">${escapeHtml(c.text)}${badgeHtml}</button>`;
     };
 
+    const compoundPair = findCompoundChain(primaryCandidates, state.originalHoverWord || state.word, state);
+
     let candidateChipsHtml = '';
     if (primaryCandidates.length > 0) {
-      candidateChipsHtml = `
-        <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px;">
-          ${primaryCandidates.slice(0, 6).map(renderSingleChip).join('')}
-        </div>
-      `;
+      if (compoundPair && Array.isArray(compoundPair.parts) && compoundPair.parts.length >= 2) {
+        const parts = compoundPair.parts;
+        const partTexts = new Set(parts.map(p => p.text));
+        const groupHtml = `
+          <div class="compound-pill-group" style="display: inline-flex; align-items: center; background: #f0faf7; border: 1.5px solid #2f5d62; border-radius: 9px; padding: 2px 5px; gap: 3px;" title="Compound constituents: ${parts.map(p => escapeHtml(p.text)).join(' + ')}">
+            <span style="font-size: 0.72em; font-weight: 800; color: #17383b; margin-right: 2px; margin-left: 2px;">🧩</span>
+            ${parts.map((p, idx) => `${idx > 0 ? `<span style="font-weight: 800; color: #2f5d62; font-size: 0.9em; padding: 0 1px;">+</span>` : ''}${renderSingleChip(p)}`).join('')}
+          </div>
+        `;
+        const others = primaryCandidates.filter(c => !partTexts.has(c.text));
+        const activeOrInjected = others.filter(c => c.text === state.dictionaryMatch || c.isLlmInjected || c.reason?.includes('LLM Matched'));
+        const normalOthers = others.filter(c => c.text !== state.dictionaryMatch && !c.isLlmInjected && !c.reason?.includes('LLM Matched'));
+        const displayOthers = [...activeOrInjected, ...normalOthers].slice(0, 5);
+
+        candidateChipsHtml = `
+          <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;">
+            ${groupHtml}
+            ${displayOthers.map(renderSingleChip).join('')}
+          </div>
+        `;
+      } else {
+        const activeOrInjected = primaryCandidates.filter(c => c.text === state.dictionaryMatch || c.isLlmInjected || c.reason?.includes('LLM Matched'));
+        const normalPrimary = primaryCandidates.filter(c => c.text !== state.dictionaryMatch && !c.isLlmInjected && !c.reason?.includes('LLM Matched'));
+        const displayPrimary = [...activeOrInjected, ...normalPrimary].slice(0, 7);
+
+        candidateChipsHtml = `
+          <div class="chips" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px;">
+            ${displayPrimary.map(renderSingleChip).join('')}
+          </div>
+        `;
+      }
       if (subCandidates.length > 0) {
         candidateChipsHtml += `
           <div class="sub-chips" style="margin-bottom: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 0.85em; opacity: 0.92;">
@@ -196,19 +369,21 @@
     const iconUrl = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL('assets/icon32.png') : '';
     const iconHtml = iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="Munmek" style="width: 24px; height: 24px; margin-right: 8px; vertical-align: middle; display: inline-block; object-fit: contain;">` : '';
 
+    const feedbackToastHtml = (state.feedback && !state.isAiLoading) ? `
+      <div class="toast-feedback ${state.feedbackType === 'error' ? 'toast-error' : (state.feedbackType === 'success' ? 'toast-success' : 'toast-info')}" role="status" aria-live="polite" style="margin: 6px 0 10px 0; padding: 8px 12px; border-radius: 8px; font-weight: 700; font-size: 0.88em; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); background: ${state.feedbackType === 'error' ? '#fee2e2' : (state.feedbackType === 'success' ? '#dcfce7' : '#f0f9ff')}; color: ${state.feedbackType === 'error' ? '#991b1b' : (state.feedbackType === 'success' ? '#166534' : '#0369a1')}; border: 1.5px solid ${state.feedbackType === 'error' ? '#ef4444' : (state.feedbackType === 'success' ? '#22c55e' : '#38bdf8')};">
+        <span style="font-size: 1.2em;">${state.feedbackType === 'error' ? '⚠️' : (state.feedbackType === 'success' ? '✅' : 'ℹ️')}</span>
+        <span>${escapeHtml(state.feedback)}</span>
+      </div>
+    ` : '';
+
     const html = [
       `<div class="title" style="display: flex; align-items: center; gap: 6px;">${iconHtml}<span>${escapeHtml(state.word || '...')}</span></div>`,
+      feedbackToastHtml,
       dictHtml,
       candidateChipsHtml,
       state.sentence ? `<div class="subtitle"><strong>Sentence:</strong> ${escapeHtml(truncateText(state.sentence, 180))}</div>` : '',
       renderActions(state, Boolean(analysis)),
-      renderAnalysisSection(analysis, state),
-      (state.feedback && !state.isAiLoading) ? `
-        <div class="toast-feedback ${state.feedbackType === 'error' ? 'toast-error' : (state.feedbackType === 'success' ? 'toast-success' : 'toast-info')}" role="status" aria-live="polite" style="margin-top: 10px; padding: 10px 14px; border-radius: 8px; font-weight: 700; font-size: 0.88em; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); background: ${state.feedbackType === 'error' ? '#fee2e2' : (state.feedbackType === 'success' ? '#dcfce7' : '#f0f9ff')}; color: ${state.feedbackType === 'error' ? '#991b1b' : (state.feedbackType === 'success' ? '#166534' : '#0369a1')}; border: 1.5px solid ${state.feedbackType === 'error' ? '#ef4444' : (state.feedbackType === 'success' ? '#22c55e' : '#38bdf8')};">
-          <span style="font-size: 1.2em;">${state.feedbackType === 'error' ? '⚠️' : (state.feedbackType === 'success' ? '✅' : 'ℹ️')}</span>
-          <span>${escapeHtml(state.feedback)}</span>
-        </div>
-      ` : ''
+      renderAnalysisSection(analysis, state)
     ].filter(Boolean).join('');
 
     const tooltipDictGroups = Array.isArray(state?.dictionaryEntries) ? groupEntriesByDictTitle(state.dictionaryEntries) : [];
@@ -573,11 +748,11 @@
       : null;
 
     const isCardMatched = activeGroupMatch
-      ? Boolean(activeGroupMatch.matched && activeGroupMatch.itemIndex === itemIndex)
-      : Boolean((state.geminiMatchedGroupIndex === groupIndex || typeof state.geminiMatchedGroupIndex !== 'number') && state.geminiMatchedItemIndex === itemIndex);
+      ? Boolean(activeGroupMatch.matched && activeGroupMatch.itemIndex === itemIndex && typeof activeGroupMatch.defIndex === 'number')
+      : Boolean((state.geminiMatchedGroupIndex === groupIndex || typeof state.geminiMatchedGroupIndex !== 'number') && state.geminiMatchedItemIndex === itemIndex && typeof state.geminiMatchedDefIndex === 'number');
 
     const matchedDefIdx = isCardMatched
-      ? (activeGroupMatch ? activeGroupMatch.defIndex : state.geminiMatchedDefIndex)
+      ? (activeGroupMatch ? (activeGroupMatch.matched ? activeGroupMatch.defIndex : null) : state.geminiMatchedDefIndex)
       : null;
     const hasGeminiMatch = typeof matchedDefIdx === 'number';
 
@@ -610,9 +785,9 @@
     let geminiBadgeHtml = '';
     if (hasGeminiMatch) {
       if (validIndex === matchedDefIdx) {
-        geminiBadgeHtml = `<span style="background: #2f5d62; color: #fff; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ LLM Matched</span>`;
+        geminiBadgeHtml = `<span style="background: linear-gradient(135deg, #17383b 0%, #2f5d62 100%); color: #fff; padding: 3px 10px; border-radius: 999px; font-size: 0.74em; font-weight: 800; margin-left: 6px; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(47,93,98,0.25); border: 1px solid #17383b;">✨ LLM Matched</span>`;
       } else {
-        geminiBadgeHtml = `<span style="background: #e4f0ee; color: #17383b; border: 1px solid #2f5d62; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ LLM Matched (Def ${matchedDefIdx + 1})</span>`;
+        geminiBadgeHtml = `<span style="background: #e4f0ee; color: #17383b; border: 1.5px solid #2f5d62; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">✨ LLM Matched (Def ${matchedDefIdx + 1})</span>`;
       }
     } else if (hasKoElectraMatch) {
       const isTopMatchedTab = validIndex === koelectraMatchedDefIdx;
@@ -625,14 +800,46 @@
       }
     }
 
+    const isCurrentDefLlmMatched = Boolean(hasGeminiMatch && validIndex === matchedDefIdx);
+    const defBoxBg = isCurrentDefLlmMatched ? '#f0faf7' : '#faf7f2';
+    const defBoxBorder = isCurrentDefLlmMatched ? '1.5px solid #99d5cb' : '1px solid #eadfce';
+    const defBoxBorderLeft = isCurrentDefLlmMatched ? '5px solid #2f5d62' : '4px solid #2f5d62';
+    const defBoxShadow = isCurrentDefLlmMatched ? 'box-shadow: 0 2px 10px rgba(47,93,98,0.1);' : '';
+
+    const aiMatchedBannerHtml = isCurrentDefLlmMatched
+      ? `<div style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.72em; font-weight: 800; color: #17383b; background: #d7ede7; padding: 2px 8px; border-radius: 5px; margin-bottom: 6px; letter-spacing: 0.02em;">
+          <span>✨</span><span>LLM Context-Matched Definition</span>
+         </div>`
+      : '';
+
     const tabsHtml = definitions.length > 1
       ? `<div class="def-tabs" style="display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; padding-bottom: 4px;">
           ${definitions.map((def, idx) => {
             const isActive = idx === validIndex;
-            const isMatchedTab = (isCardMatched && matchedDefIdx === idx) || (isKoElectraMatched && koelectraMatchedDefIdx === idx);
+            const isLlmTab = (isCardMatched && matchedDefIdx === idx);
+            const isMatchedTab = isLlmTab || (isKoElectraMatched && koelectraMatchedDefIdx === idx);
             const shortText = truncateText(stripHtml(def), 18);
             const tabScoreStr = (isStage2Enabled && defConfScores[idx]) ? ` (${defConfScores[idx]})` : '';
-            return `<button type="button" class="def-tab ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid ${isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4')}; background: ${isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff')}; color: ${isActive ? '#fff' : '#4f463a'};">Def ${idx + 1}: ${escapeHtml(shortText)}${tabScoreStr}${isMatchedTab ? ' ✨' : ''}</button>`;
+
+            let tabBg = isActive ? '#2f5d62' : (isMatchedTab ? '#e4f0ee' : '#fff');
+            let tabColor = isActive ? '#fff' : '#4f463a';
+            let tabBorder = isActive ? '#2f5d62' : (isMatchedTab ? '#2f5d62' : '#ddd3c4');
+            let extraStyle = '';
+
+            if (isLlmTab) {
+              if (isActive) {
+                tabBg = 'linear-gradient(135deg, #17383b 0%, #2f5d62 100%)';
+                tabBorder = '#17383b';
+                extraStyle = 'box-shadow: 0 2px 6px rgba(47,93,98,0.3); font-weight: 800;';
+              } else {
+                tabBg = '#ebf7f4';
+                tabColor = '#17383b';
+                tabBorder = '#2f5d62';
+                extraStyle = 'box-shadow: 0 0 0 1px rgba(47,93,98,0.2); font-weight: 700;';
+              }
+            }
+
+            return `<button type="button" class="def-tab ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} data-action="select-def-tab" data-item-index="${itemIndex}" data-def-index="${idx}" style="cursor: pointer; font-size: 0.76em; padding: 4px 9px; border-radius: 6px; border: 1px solid ${tabBorder}; background: ${tabBg}; color: ${tabColor}; ${extraStyle}">Def ${idx + 1}: ${escapeHtml(shortText)}${tabScoreStr}${isMatchedTab ? ' ✨' : ''}</button>`;
           }).join('')}
          </div>`
       : '';
@@ -648,7 +855,8 @@
             <button type="button" class="chip" data-action="anki-def" data-item-index="${itemIndex}" data-def-index="${validIndex}" title="Add or update this specific definition in Anki" style="cursor: pointer; font-size: 0.76em; padding: 2px 8px; border: none; background: #2f5d62; color: #fff; border-radius: 6px;">+ Anki</button>
           </div>
           ${tabsHtml}
-          <div class="def-text ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} style="font-size: 0.94em; font-weight: 400; color: #1e1b16; background: #faf7f2; border: 1px solid #eadfce; border-left: 4px solid #2f5d62; border-radius: 8px; padding: 10px 12px; line-height: 1.65; white-space: pre-line;">
+          <div class="def-text ${isJa ? 'munmek-ja' : ''}" ${isJa ? 'lang="ja"' : ''} style="font-size: 0.94em; font-weight: 400; color: #1e1b16; background: ${defBoxBg}; border: ${defBoxBorder}; border-left: ${defBoxBorderLeft}; ${defBoxShadow} border-radius: 8px; padding: 10px 12px; line-height: 1.65; white-space: pre-line;">
+            ${aiMatchedBannerHtml}
             ${renderCollapsibleDefinition(selectedDef, itemIndex)}
           </div>
          </div>`
@@ -1002,18 +1210,26 @@
   }
 
   function autoSelectBestDefinitionFromGemini(state, analysisData) {
-    if (!state || !analysisData || !Array.isArray(state.dictionaryEntries) || state.dictionaryEntries.length === 0) return;
+    if (!state) return;
+    state.geminiMatchedGroupIndex = null;
+    state.geminiMatchedItemIndex = null;
+    state.geminiMatchedDefIndex = null;
+    state.geminiMatchesByGroup = null;
+    state.geminiMatchedBase = null;
+    state.geminiMatchedSurface = null;
+    if (!analysisData) return;
 
-    const textFragments = [];
     let geminiPos = '';
     let geminiBase = '';
     let geminiHanja = '';
-    const meaningFragments = [];
+    const definitionFragments = [];
+    const grammarFragments = [];
 
     if (typeof analysisData === 'object') {
-      if (analysisData.definition) meaningFragments.push(String(analysisData.definition));
-      if (analysisData.meaning) meaningFragments.push(String(analysisData.meaning));
-      if (analysisData.translation) meaningFragments.push(String(analysisData.translation));
+      if (analysisData.definition) definitionFragments.push(String(analysisData.definition));
+      if (analysisData.meaning) definitionFragments.push(String(analysisData.meaning));
+      if (analysisData.translation) definitionFragments.push(String(analysisData.translation));
+      if (analysisData.grammar || analysisData.grammar_notes) grammarFragments.push(String(analysisData.grammar || analysisData.grammar_notes));
 
       const wordsAnalysis = Array.isArray(analysisData.words_analysis)
         ? analysisData.words_analysis
@@ -1021,12 +1237,21 @@
 
       if (Array.isArray(wordsAnalysis) && wordsAnalysis.length > 0) {
         const cleanW = cleanKoreanWord(state.word || '');
+        const cleanOrig = cleanKoreanWord(state.originalHoverWord || '');
         const cleanM = cleanKoreanWord(state.dictionaryMatch || '');
+        const rawW = cleanKoreanLemma(state.word || '');
+        const rawOrig = cleanKoreanLemma(state.originalHoverWord || '');
         const targetItem = wordsAnalysis.find((item) => {
           const s = cleanKoreanWord(item.surface || item.word || '');
           const b = cleanKoreanWord(item.base || '');
-          return (s && (s === cleanW || s === cleanM || cleanW.startsWith(s))) || (b && (b === cleanW || b === cleanM));
-        });
+          const rawS = cleanKoreanLemma(item.surface || item.word || '');
+          const rawB = cleanKoreanLemma(item.base || '');
+          if (s && (s === cleanW || s === cleanOrig || s === cleanM || cleanW.startsWith(s) || s.startsWith(cleanW) || cleanOrig.startsWith(s) || s.startsWith(cleanOrig))) return true;
+          if (b && (b === cleanW || b === cleanOrig || b === cleanM || cleanW.startsWith(b) || b.startsWith(cleanW) || cleanOrig.startsWith(b) || b.startsWith(cleanOrig))) return true;
+          if (rawS && (rawS === rawW || rawS === rawOrig || rawW.startsWith(rawS) || rawS.startsWith(rawW) || rawOrig.startsWith(rawS) || rawS.startsWith(rawOrig))) return true;
+          if (rawB && (rawB === rawW || rawB === rawOrig || rawW.startsWith(rawB) || rawB.startsWith(rawW) || rawOrig.startsWith(rawB) || rawB.startsWith(rawOrig))) return true;
+          return false;
+        }) || (wordsAnalysis.length === 1 ? wordsAnalysis[0] : null);
 
         if (targetItem) {
           if (targetItem.pos) geminiPos = String(targetItem.pos).toLowerCase();
@@ -1034,32 +1259,75 @@
             geminiBase = cleanKoreanLemma(targetItem.base);
             state.geminiMatchedBase = geminiBase;
           }
+          if (targetItem.surface || targetItem.word) {
+            state.geminiMatchedSurface = cleanKoreanWord(targetItem.surface || targetItem.word);
+          }
           if (targetItem.hanja) geminiHanja = String(targetItem.hanja).trim();
-          if (Array.isArray(targetItem.definitions)) meaningFragments.push(...targetItem.definitions.map(String));
-          if (targetItem.definition) meaningFragments.push(String(targetItem.definition));
-          if (targetItem.meaning) meaningFragments.push(String(targetItem.meaning));
+          if (Array.isArray(targetItem.definitions)) definitionFragments.push(...targetItem.definitions.map(String));
+          if (targetItem.definition) definitionFragments.push(String(targetItem.definition));
+          if (targetItem.meaning) definitionFragments.push(String(targetItem.meaning));
+          if (targetItem.grammar_notes) grammarFragments.push(String(targetItem.grammar_notes));
+          if (targetItem.notes) grammarFragments.push(String(targetItem.notes));
+
           Object.keys(targetItem).forEach((k) => {
             const kl = k.toLowerCase();
             if (kl.includes('translation') || kl.includes('meaning') || kl.includes('japanese') || kl.includes('gloss')) {
-              if (typeof targetItem[k] === 'string') meaningFragments.push(targetItem[k]);
+              if (typeof targetItem[k] === 'string') definitionFragments.push(targetItem[k]);
             }
           });
         }
       }
+
+      if (!geminiBase && analysisData.base) {
+        geminiBase = cleanKoreanLemma(analysisData.base);
+        state.geminiMatchedBase = geminiBase;
+      }
+      if (!state.geminiMatchedSurface && (analysisData.surface || analysisData.word)) {
+        state.geminiMatchedSurface = cleanKoreanWord(analysisData.surface || analysisData.word);
+      }
     }
 
-    const geminiMeaningText = meaningFragments.join(' ').toLowerCase();
-    if (!geminiMeaningText.trim() && !geminiBase) return;
-
-    const dictGroups = groupEntriesByDictTitle(state.dictionaryEntries);
-    if (!Array.isArray(dictGroups) || dictGroups.length === 0) return;
+    if (!Array.isArray(state.dictionaryEntries) || state.dictionaryEntries.length === 0) {
+      return;
+    }
 
     const extractTokens = (str) => {
       return (String(str || '').toLowerCase().match(/[a-zA-Z0-9\u00C0-\u024F\u3040-\u30ff\u4e00-\u9faf\uac00-\ud7a3]{2,}/g) || []);
     };
 
     const stopWords = new Set(['to', 'a', 'an', 'the', 'and', 'or', 'of', 'in', 'is', 'attached', 'modify', 'suffix', 'verb', 'noun', 'stem', 'grammatical', 'context', 'ending']);
-    const geminiTokens = new Set(extractTokens(geminiMeaningText).filter(t => !stopWords.has(t)));
+    const primaryMeaningText = (definitionFragments.length > 0 ? definitionFragments : grammarFragments).join(' ').toLowerCase();
+    if (!primaryMeaningText.trim() && !geminiBase) {
+      state.geminiMatchedGroupIndex = null;
+      state.geminiMatchedItemIndex = null;
+      state.geminiMatchedDefIndex = null;
+      state.geminiMatchesByGroup = null;
+      state.geminiMatchedBase = null;
+      state.geminiMatchedSurface = null;
+      return;
+    }
+
+    const geminiDefTokens = new Set(extractTokens(primaryMeaningText).filter(t => !stopWords.has(t)));
+    const hasGeminiDefs = geminiDefTokens.size > 0;
+
+    function tokenMatchesGemini(token) {
+      if (!token || stopWords.has(token)) return false;
+      if (geminiDefTokens.has(token)) return true;
+      if (token.length >= 4) {
+        for (const gt of geminiDefTokens) {
+          if (gt.length >= 4) {
+            if (token.startsWith(gt) || gt.startsWith(token)) return true;
+            const stem1 = token.replace(/(?:ing|ed|es|s)$/, '');
+            const stem2 = gt.replace(/(?:ing|ed|es|s)$/, '');
+            if (stem1.length >= 3 && stem1 === stem2) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    const dictGroups = groupEntriesByDictTitle(state.dictionaryEntries);
+    if (!Array.isArray(dictGroups) || dictGroups.length === 0) return;
 
     // Pass 1: Score each dictionary group and find candidate winners
     let primaryMatchedHanja = geminiHanja;
@@ -1077,19 +1345,14 @@
       group.items.forEach((item, itemIdx) => {
         const itemPos = String(item.pos || '').toLowerCase();
         const itemBase = cleanKoreanWord(item.base || item.surface || item.word || '');
+        const rawItemBase = cleanKoreanLemma(item.base || item.surface || item.word || '');
         const rawDefs = Array.isArray(item.definitions) ? item.definitions : [];
         const splitDefs = splitEmbeddedDefinitions(rawDefs);
 
-        let posBonus = 0;
-        if (geminiPos && itemPos) {
-          if (itemPos.includes(geminiPos) || geminiPos.includes(itemPos)) posBonus += 6;
-        }
-
-        let baseBonus = 0;
-        if (geminiBase && itemBase) {
-          if (geminiBase === itemBase) baseBonus += 20;
-          else if (geminiBase.startsWith(itemBase) || itemBase.startsWith(geminiBase)) baseBonus += 10;
-        }
+        // Tier 1: Evaluate definitions within this entry
+        let bestItemDefIdx = 0;
+        let bestItemDefScore = -1;
+        let bestItemTokenCount = 0;
 
         splitDefs.forEach((defText, defIdx) => {
           const isStub = defText.includes('Conjugation variant:') || defText.includes('->');
@@ -1098,24 +1361,58 @@
           const tokens = extractTokens(defText);
           let tokenScore = 0;
           tokens.forEach((t) => {
-            if (!stopWords.has(t) && (geminiTokens.has(t) || geminiMeaningText.includes(t))) {
+            if (tokenMatchesGemini(t)) {
               tokenScore += t.length >= 4 ? 3 : 2;
             }
           });
 
           // Stage 2 Neural Multilingual E5 alignment bonus
           const e5DefBonus = (typeof item._bestDefIndex === 'number' && item._bestDefIndex === defIdx) ? 20 : 0;
-          const e5ConfBonus = item._confidenceScore ? (parseInt(item._confidenceScore, 10) / 4) : 0;
+          const defScore = (tokenScore > 0 ? (tokenScore * 20) : 0) + e5DefBonus;
 
-          const totalScore = tokenScore + posBonus + baseBonus + e5DefBonus + e5ConfBonus;
-          if (totalScore > bestScore) {
-            bestScore = totalScore;
-            bestItemIdx = itemIdx;
-            bestDefIdx = defIdx;
-            bestTokenScore = tokenScore;
-            bestItem = item;
+          if (defScore > bestItemDefScore) {
+            bestItemDefScore = defScore;
+            bestItemDefIdx = defIdx;
+            bestItemTokenCount = tokenScore;
           }
         });
+
+        // Tier 2: Entry-level score (Base match + POS match + Hanja match + E5 confidence)
+        const hasDefMatch = bestItemTokenCount > 0;
+        let entryScore = 0;
+        if (geminiBase) {
+          const cleanGeminiBase = cleanKoreanWord(geminiBase);
+          const isExactBase = (cleanGeminiBase === itemBase || geminiBase === rawItemBase);
+          const isPrefixBase = (!isExactBase && (cleanGeminiBase.startsWith(itemBase) || itemBase.startsWith(cleanGeminiBase) ||
+                                geminiBase.startsWith(rawItemBase) || rawItemBase.startsWith(geminiBase)));
+          if (isExactBase) {
+            entryScore += (!hasGeminiDefs || hasDefMatch) ? 80 : 10;
+          } else if (isPrefixBase) {
+            entryScore += (!hasGeminiDefs || hasDefMatch) ? 40 : 5;
+          }
+        }
+        if (geminiPos && itemPos) {
+          if (itemPos.includes(geminiPos) || geminiPos.includes(itemPos)) {
+            entryScore += (!hasGeminiDefs || hasDefMatch) ? 30 : 5;
+          }
+        }
+        if (geminiHanja && item.hanja) {
+          const h = String(item.hanja).trim();
+          if (h === geminiHanja || geminiHanja.includes(h) || h.includes(geminiHanja)) {
+            entryScore += 60;
+          }
+        }
+        const e5ConfBonus = item._confidenceScore ? (parseInt(item._confidenceScore, 10) / 4) : 0;
+        entryScore += e5ConfBonus;
+
+        const totalCardScore = entryScore + (bestItemDefScore > 0 ? bestItemDefScore : 0);
+        if (totalCardScore > bestScore) {
+          bestScore = totalCardScore;
+          bestItemIdx = itemIdx;
+          bestDefIdx = bestItemDefIdx;
+          bestTokenScore = bestItemTokenCount;
+          bestItem = item;
+        }
       });
 
       groupBestList.push({
@@ -1129,7 +1426,7 @@
     });
 
     // If any group had strong token matches (e.g. English group), inherit its Hanja to anchor CJK dictionaries
-    const strongGroup = groupBestList.find(g => (g.tokenScore >= 3 || (g.bestItem && (g.bestItem.dictTargetLanguage === 'en' || g.bestItem.dictTargetLanguage === 'eng') && g.bestScore >= 20)) && g.bestItem && g.bestItem.hanja);
+    const strongGroup = groupBestList.find(g => (g.tokenScore >= 2 || (g.bestItem && (g.bestItem.dictTargetLanguage === 'en' || g.bestItem.dictTargetLanguage === 'eng') && g.bestScore >= 40)) && g.bestItem && g.bestItem.hanja);
     if (strongGroup && !primaryMatchedHanja) {
       primaryMatchedHanja = String(strongGroup.bestItem.hanja).trim();
     }
@@ -1143,6 +1440,7 @@
     let overallBestGroupIdx = (state && typeof state.selectedGroupIndex === 'number') ? state.selectedGroupIndex : 0;
     let overallBestItemIdx = 0;
     let overallBestDefIdx = 0;
+    let overallMatched = false;
 
     groupBestList.forEach((g) => {
       const group = dictGroups[g.groupIdx];
@@ -1164,7 +1462,7 @@
       let groupBestScore = g.bestScore;
       let groupBestItemIdx = g.bestItemIdx;
       let groupBestDefIdx = g.bestDefIdx;
-      let groupMatched = g.tokenScore > 0 || group.items.length === 1;
+      let groupMatched = false;
 
       if (primaryMatchedHanja && group.items.length > 1) {
         // Look for Hanja alignment across homonyms in this group
@@ -1194,13 +1492,23 @@
             highestConfIdx = itemIdx;
           }
         });
-        if (highestConf >= 65 && highestConfIdx >= 0) {
+        if (highestConf >= 75 && highestConfIdx >= 0) {
           groupBestItemIdx = highestConfIdx;
           const targetItem = group.items[highestConfIdx];
           const rawDefs = Array.isArray(targetItem.definitions) ? targetItem.definitions : [];
           const splitDefs = splitEmbeddedDefinitions(rawDefs);
           groupBestDefIdx = (typeof targetItem._bestDefIndex === 'number' && targetItem._bestDefIndex < splitDefs.length) ? targetItem._bestDefIndex : 0;
           groupMatched = true;
+        }
+      }
+
+      if (!groupMatched) {
+        if (hasGeminiDefs) {
+          // Strict requirement: Definition token must match when LLM provided explicit definitions/meanings
+          groupMatched = (g.tokenScore > 0);
+        } else {
+          // Fallback when LLM only provided base/POS without definition text
+          groupMatched = (g.bestScore >= 40) || (group.items.length === 1);
         }
       }
 
@@ -1211,15 +1519,16 @@
         matched: groupMatched
       };
 
-      if (isLangMatch && groupBestScore > overallBestScore) {
+      if (isLangMatch && groupMatched && groupBestScore > overallBestScore) {
         overallBestScore = groupBestScore;
         overallBestGroupIdx = g.groupIdx;
         overallBestItemIdx = groupBestItemIdx;
         overallBestDefIdx = groupBestDefIdx;
+        overallMatched = true;
       }
     });
 
-    if (overallBestScore >= 0) {
+    if (overallBestScore >= 0 && overallMatched) {
       state.geminiMatchedGroupIndex = overallBestGroupIdx;
       state.geminiMatchedItemIndex = overallBestItemIdx;
       state.geminiMatchedDefIndex = overallBestDefIdx;
@@ -1257,7 +1566,7 @@
     if (cleaned.endsWith('다') && cleaned.length >= 2) {
       return cleaned;
     }
-    return cleaned.replace(/(은|는|이|가|을|를|의|에|에서|와|과|도|만|으로|로)$/, '') || cleaned;
+    return cleaned.replace(/(이나마|에게서|에서는|에게도|한테도|이라도|이든지|만큼|대로|같이|처럼|밖에|이나|이란|이라|이야|까지|부터|보다|마다|조차|커녕|에서|에게|은|는|이|가|을|를|의|에|와|과|도|만|으로|로)$/, '') || cleaned;
   }
 
   function positionTooltip(x, y, fontSize = 15) {
@@ -1308,6 +1617,7 @@
     hideTooltip,
     splitEmbeddedDefinitions,
     groupEntriesByDictTitle,
+    getGeminiAnalysisForState,
     autoSelectBestDefinitionFromGemini,
     extractCustomFields,
     renderAnalysisSection,
@@ -1321,7 +1631,9 @@
     getDictionaryLanguage,
     getLlmResponseLanguage,
     renderActions,
-    renderDictionaryEntriesGrouped
+    renderDictionaryEntriesGrouped,
+    findCompoundPair,
+    findCompoundChain
   };
 
   const targetGlobal = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : global);

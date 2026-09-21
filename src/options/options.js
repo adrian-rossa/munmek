@@ -20,6 +20,31 @@ document.addEventListener('DOMContentLoaded', () => {
   const testAiBtn = document.getElementById('testAiBtn');
   const aiTestStatus = document.getElementById('aiTestStatus');
   const aiPromptExtensionInput = document.getElementById('aiPromptExtension');
+  const loadExamplePromptBtn = document.getElementById('loadExamplePromptBtn');
+  const addCustomFieldBtn = document.getElementById('addCustomFieldBtn');
+  const customFieldsContainer = document.getElementById('customFieldsContainer');
+
+  const DEFAULT_AI_PROMPT_EXTENSION = `You are an expert Korean linguistic assistant. Explain the target word and sentence using simple building-block logic.
+
+Rules:
+1. Break grammar down like simple math: [Word] + [Ending/Particle] = [Function/Meaning].
+2. Avoid complex linguistic terms. Use simple labels that explain the function and real meaning of the building blocks (e.g., "Topic Marker", "Direction Marker", "Connector").
+3. Explain ONLY the meaning relevant to the given sentence context. Make sure to use the context if it helps explaining.
+4. Keep bullets short and concise and avoid dense Western grammar jargon. Explain the language logically on its own terms.`;
+
+  if (loadExamplePromptBtn && aiPromptExtensionInput) {
+    loadExamplePromptBtn.addEventListener('click', () => {
+      aiPromptExtensionInput.value = DEFAULT_AI_PROMPT_EXTENSION;
+      if (statusDiv) {
+        statusDiv.textContent = 'Example prompt instructions loaded. Click Save to apply.';
+        statusDiv.className = 'info';
+        setTimeout(() => {
+          statusDiv.textContent = '';
+          statusDiv.className = '';
+        }, 3000);
+      }
+    });
+  }
   const ankiConnectUrlInput = document.getElementById('ankiConnectUrl');
   const testAnkiBtn = document.getElementById('testAnkiBtn');
   const ankiStatus = document.getElementById('ankiStatus');
@@ -142,7 +167,64 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let currentDictOrder = [];
   let savedFieldMapping = {};
-  let cachedTrackedGeminiFields = {};
+  let cachedCustomAiFields = [];
+
+  function renderCustomFieldRow(field = { key: '', description: '' }) {
+    if (!customFieldsContainer) return;
+    const row = document.createElement('div');
+    row.className = 'custom-field-row';
+    row.style.cssText = 'display: flex; gap: 8px; align-items: center; background: #faf7f2; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line);';
+    row.innerHTML = `
+      <input type="text" class="custom-field-key" placeholder="Field key (e.g. japanese_translation)" value="${escapeHtml(field.key || '')}" style="flex: 1; max-width: 220px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-family: monospace; font-size: 13px; background: #fff;">
+      <input type="text" class="custom-field-desc" placeholder="Instructions/description for this field (e.g. Japanese translation in context)" value="${escapeHtml(field.description || '')}" style="flex: 2; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; background: #fff;">
+      <button type="button" class="remove-custom-field-btn" title="Remove Field" style="background: #fee2e2; color: #991b1b; border: 1px solid #f87171; border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; font-weight: 700;">✕</button>
+    `;
+
+    const keyInput = row.querySelector('.custom-field-key');
+    const descInput = row.querySelector('.custom-field-desc');
+    const removeBtn = row.querySelector('.remove-custom-field-btn');
+
+    keyInput.addEventListener('input', () => {
+      keyInput.value = keyInput.value.replace(/[^a-zA-Z0-9_]/g, '');
+      syncCustomAiFieldsFromUI();
+      updateAnkiModelFields();
+    });
+
+    descInput.addEventListener('input', () => {
+      syncCustomAiFieldsFromUI();
+    });
+
+    removeBtn.addEventListener('click', () => {
+      row.remove();
+      syncCustomAiFieldsFromUI();
+      updateAnkiModelFields();
+    });
+
+    customFieldsContainer.appendChild(row);
+  }
+
+  function syncCustomAiFieldsFromUI() {
+    if (!customFieldsContainer) return [];
+    const fields = [];
+    customFieldsContainer.querySelectorAll('.custom-field-row').forEach(row => {
+      const key = (row.querySelector('.custom-field-key')?.value || '').trim().replace(/[^a-zA-Z0-9_]/g, '');
+      const description = (row.querySelector('.custom-field-desc')?.value || '').trim();
+      if (key) {
+        fields.push({ key, description });
+      }
+    });
+    cachedCustomAiFields = fields;
+    return fields;
+  }
+
+  if (addCustomFieldBtn) {
+    addCustomFieldBtn.addEventListener('click', () => {
+      renderCustomFieldRow({ key: '', description: '' });
+      const lastRow = customFieldsContainer?.lastElementChild;
+      const keyInput = lastRow?.querySelector('.custom-field-key');
+      if (keyInput) keyInput.focus();
+    });
+  }
 
   const FIELD_VALUE_OPTIONS = [
     { value: 'none', label: 'None (Empty)' },
@@ -549,36 +631,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const opts = [...FIELD_VALUE_OPTIONS];
     const existingValues = new Set(opts.map(o => o.value));
 
-    const userText = aiPromptExtensionInput ? aiPromptExtensionInput.value : '';
-    const reservedKeys = new Set(['words_analysis', 'words', 'analysis', 'conjugation']);
-
-    const reservedWords = new Set([
-      'and', 'the', 'for', 'with', 'from', 'words', 'analysis', 'rules',
-      'words_analysis', 'pos', 'surface', 'base', 'definitions', 'grammar_notes',
-      'conjugation', 'sentence', 'context', 'korean', 'return', 'only', 'valid', 'json',
-      'string', 'array', 'object', 'number', 'boolean', 'field', 'fields', 'value', 'values',
-      'custom', 'extra', 'additional', 'following', 'containing', 'translation', 'definition'
-    ]);
-
-    const customKeyMatches = [
-      ...userText.matchAll(/[\("'`]\s*([a-zA-Z0-9_]{3,40})\s*[\)"'`]/g),
-      ...userText.matchAll(/\{\{([a-zA-Z0-9_]{3,40})\}\}/g),
-      ...userText.matchAll(/["'`]?([a-zA-Z0-9_]{3,40})["'`]?\s*:/g),
-      ...userText.matchAll(/(?:as|field|key|named|\()\s*["'(`]?([a-zA-Z0-9_]{3,40})["')`]?/g),
-      ...userText.matchAll(/["'`(]?([a-zA-Z0-9_]{3,40})["'`)']?\s+(?:field|key)\b/gi),
-      ...userText.matchAll(/\b([a-z][a-z0-9_]{2,30}_(?:translation|def|definition|meaning|field|note|nuance|romaji|reading|kana|kanji))\b/gi)
-    ];
-
-    for (const m of customKeyMatches) {
-      const key = m[1];
-      if (reservedWords.has(key.toLowerCase())) continue;
-      if (!key.includes('_') && !/^[a-z]+[A-Z]/.test(key) && !['nuance', 'reading', 'hanja', 'synopsis', 'etymology', 'pitch', 'romaji'].includes(key.toLowerCase())) continue;
-      const val = `{{${key}}}`;
-      if (!existingValues.has(val)) {
-        existingValues.add(val);
-        const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (Custom Prompt Field)';
-        opts.push({ value: val, label });
-      }
+    // Include explicitly configured custom fields
+    if (Array.isArray(cachedCustomAiFields)) {
+      cachedCustomAiFields.forEach((field) => {
+        const key = (field.key || '').trim().replace(/[^a-zA-Z0-9_]/g, '');
+        if (!key) return;
+        const val = `{{${key}}}`;
+        if (!existingValues.has(val)) {
+          existingValues.add(val);
+          const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (Custom Field)';
+          opts.push({ value: val, label });
+        }
+      });
     }
 
     // Include standard LLM fields if not already present
@@ -590,17 +654,6 @@ document.addEventListener('DOMContentLoaded', () => {
         opts.push({ value: val, label });
       }
     });
-
-    if (cachedTrackedGeminiFields && typeof cachedTrackedGeminiFields === 'object') {
-      Object.keys(cachedTrackedGeminiFields).forEach((key) => {
-        const val = `{{${key}}}`;
-        if (!existingValues.has(val) && !reservedKeys.has(key)) {
-          existingValues.add(val);
-          const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (Detected LLM Field)';
-          opts.push({ value: val, label });
-        }
-      });
-    }
 
     return opts;
   }
@@ -687,9 +740,15 @@ document.addEventListener('DOMContentLoaded', () => {
     'ankiNoteType',
     'ankiFieldMapping',
     'ankiDefinitionField',
-    'trackedGeminiFields'
+    'customAiFields'
   ], (result) => {
-    if (result.trackedGeminiFields) cachedTrackedGeminiFields = result.trackedGeminiFields;
+    if (Array.isArray(result.customAiFields)) {
+      cachedCustomAiFields = result.customAiFields;
+      if (customFieldsContainer) {
+        customFieldsContainer.innerHTML = '';
+        cachedCustomAiFields.forEach(f => renderCustomFieldRow(f));
+      }
+    }
     if (aiProviderSelect) {
       aiProviderSelect.value = result.aiProvider || 'custom';
       updateAiProviderVisibility();
@@ -708,7 +767,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (customMinPInput) customMinPInput.value = result.customMinP !== undefined ? result.customMinP : '0.05';
     if (customRepeatPenaltyInput) customRepeatPenaltyInput.value = result.customRepeatPenalty !== undefined ? result.customRepeatPenalty : '1.1';
     if (customPresencePenaltyInput) customPresencePenaltyInput.value = result.customPresencePenalty !== undefined ? result.customPresencePenalty : '0.0';
-    if (aiPromptExtensionInput) aiPromptExtensionInput.value = result.aiPromptExtension || '';
+    if (aiPromptExtensionInput) aiPromptExtensionInput.value = result.aiPromptExtension !== undefined ? result.aiPromptExtension : DEFAULT_AI_PROMPT_EXTENSION;
 
     function updateDevModeVisibility() {
       const isDev = Boolean(enableDevModeInput && enableDevModeInput.checked);
@@ -760,9 +819,6 @@ document.addEventListener('DOMContentLoaded', () => {
     ankiDefinitionFieldSelect.setAttribute('data-value', result.ankiDefinitionField || 'Back');
     try { savedFieldMapping = JSON.parse(result.ankiFieldMapping || '{"Front":"{{word}}","Back":"{{definition}}"}'); } catch (e) { savedFieldMapping = { Front: '{{word}}', Back: '{{definition}}' }; }
     ankiFieldMappingInput.value = JSON.stringify(savedFieldMapping, null, 2);
-    if (aiPromptExtensionInput) {
-      aiPromptExtensionInput.addEventListener('input', updateAnkiModelFields);
-    }
     testAnkiConnection(false);
   });
 
@@ -780,6 +836,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   resetButton.addEventListener('click', () => {
+    if (!confirm('Are you sure you want to reset all extension settings back to initial defaults? This will restore all options and prompt instructions.')) {
+      return;
+    }
+
     if (aiProviderSelect) aiProviderSelect.value = 'custom';
     updateAiProviderVisibility();
     apiKeyInput.value = '';
@@ -796,7 +856,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (customRepeatPenaltyInput) customRepeatPenaltyInput.value = '1.1';
     if (customPresencePenaltyInput) customPresencePenaltyInput.value = '0.0';
     if (tmdbApiKeyInput) tmdbApiKeyInput.value = '';
-    if (aiPromptExtensionInput) aiPromptExtensionInput.value = '';
+    if (aiPromptExtensionInput) aiPromptExtensionInput.value = DEFAULT_AI_PROMPT_EXTENSION;
+    if (customFieldsContainer) customFieldsContainer.innerHTML = '';
+    cachedCustomAiFields = [];
     if (enableDevModeInput) enableDevModeInput.checked = false;
     enableOnnxRerankerInput.checked = false;
     if (enableWebGpuInput) enableWebGpuInput.checked = false;
@@ -810,6 +872,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (selectedDictionaryIdInput) selectedDictionaryIdInput.value = 'all';
     if (modifierKeyInput) modifierKeyInput.value = 'Shift';
     if (tooltipFontSizeInput) tooltipFontSizeInput.value = '15';
+    if (ankiConnectUrlInput) ankiConnectUrlInput.value = 'http://127.0.0.1:8765';
+    if (ankiDeckNameSelect) ankiDeckNameSelect.value = 'Korean';
+    if (ankiNoteTypeSelect) ankiNoteTypeSelect.value = 'Basic';
+    if (ankiDefinitionFieldSelect) ankiDefinitionFieldSelect.value = 'Back';
     if (customModelSelect) {
       customModelSelect.innerHTML = '<option value="">-- Discovered Models --</option>';
       customModelSelect.style.display = 'none';
@@ -818,8 +884,53 @@ document.addEventListener('DOMContentLoaded', () => {
       geminiModelSelect.innerHTML = '<option value="">-- Discovered Models --</option>';
       geminiModelSelect.style.display = 'none';
     }
-    statusDiv.textContent = 'Defaults restored locally. Click Save to store them.';
-    statusDiv.className = 'success';
+
+    const defaultSettings = {
+      aiProvider: 'custom',
+      apiKey: '',
+      tmdbApiKey: '',
+      modelId: 'gemini-flash-lite-latest',
+      customEndpointUrl: 'http://localhost:1234/v1',
+      customModelId: 'llama-3.2-3b-instruct',
+      customApiKey: '',
+      autoTriggerAiOnHover: false,
+      customDisableReasoning: false,
+      customTemperature: '0.2',
+      customTopP: '0.9',
+      customTopK: '40',
+      customMinP: '0.05',
+      customRepeatPenalty: '1.1',
+      customPresencePenalty: '0.0',
+      aiPromptExtension: DEFAULT_AI_PROMPT_EXTENSION,
+      customAiFields: [],
+      enableDevMode: false,
+      enableOnnxReranker: false,
+      enableWebGpu: false,
+      useFullContext: false,
+      enableCheaperSummaryModel: false,
+      cheaperSummaryModelId: 'gemini-flash-lite-latest',
+      selectedDictionaryId: 'all',
+      modifierKey: 'Shift',
+      tooltipFontSize: '15',
+      ankiConnectUrl: 'http://127.0.0.1:8765',
+      ankiDeckName: 'Korean',
+      ankiNoteType: 'Basic',
+      ankiFieldMapping: JSON.stringify({
+        Front: '{{word}}',
+        Back: '{{definition}}<br><br>{{translation}}<br><br>{{grammar}}'
+      }, null, 2),
+      ankiDefinitionField: 'Back'
+    };
+
+    chrome.storage.local.set(defaultSettings, () => {
+      statusDiv.textContent = 'All settings have been reset back to defaults!';
+      statusDiv.className = 'success';
+      updateAnkiModelFields();
+      setTimeout(() => {
+        statusDiv.textContent = '';
+        statusDiv.className = '';
+      }, 4000);
+    });
   });
 
   saveButton.addEventListener('click', () => {
@@ -853,15 +964,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const ankiNoteType = ankiNoteTypeSelect.value || 'Basic';
     const ankiDefinitionField = ankiDefinitionFieldSelect.value || 'Back';
     updateFieldMappingJson();
-    const updatedTrackedFields = {};
-    if (cachedTrackedGeminiFields && typeof cachedTrackedGeminiFields === 'object') {
-      Object.keys(cachedTrackedGeminiFields).forEach((key) => {
-        if (aiPromptExtension.includes(key)) {
-          updatedTrackedFields[key] = cachedTrackedGeminiFields[key];
-        }
-      });
-    }
-    cachedTrackedGeminiFields = updatedTrackedFields;
+    const customAiFields = syncCustomAiFieldsFromUI();
 
     const dataToSave = {
       aiProvider,
@@ -880,6 +983,7 @@ document.addEventListener('DOMContentLoaded', () => {
       customRepeatPenalty,
       customPresencePenalty,
       aiPromptExtension,
+      customAiFields,
       enableDevMode,
       enableOnnxReranker,
       enableWebGpu,
@@ -894,8 +998,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ankiNoteType,
       ankiFieldMapping: JSON.stringify(savedFieldMapping, null, 2),
       ankiDefinitionField,
-      dictionaryOrder: currentDictOrder,
-      trackedGeminiFields: updatedTrackedFields
+      dictionaryOrder: currentDictOrder
     };
     chrome.storage.local.set(dataToSave, () => {
       if (chrome.runtime.lastError) {
@@ -917,6 +1020,19 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 4000);
     });
   });
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'local' && changes.customAiFields) {
+        cachedCustomAiFields = changes.customAiFields.newValue || [];
+        if (customFieldsContainer) {
+          customFieldsContainer.innerHTML = '';
+          cachedCustomAiFields.forEach(f => renderCustomFieldRow(f));
+        }
+        updateAnkiModelFields();
+      }
+    });
+  }
 
   function escapeHtml(val) {
     return String(val || '')

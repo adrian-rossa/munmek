@@ -10,6 +10,7 @@
   const pendingAnalysisRequests = new Map();
   const pendingQuickFallbacks = new Map();
   const quickLlmLookupCache = new Map();
+  const llmDiscoveredCandidates = new Map();
 
   function boundedMapSet(map, key, value, maxSize = 300) {
     if (map.size >= maxSize) {
@@ -437,9 +438,18 @@
     const word = normalizeText(context.word);
     const sentence = normalizeText(context.sentence);
     const candidateList = generateCandidates(word, sentence);
+    const llmCands = llmDiscoveredCandidates.get(word);
+    if (llmCands && Array.isArray(llmCands)) {
+      for (const lc of llmCands) {
+        if (!candidateList.find((c) => c.text === lc.text)) {
+          candidateList.unshift({ ...lc, isLlmInjected: true });
+        }
+      }
+    }
 
     return {
       word,
+      originalHoverWord: word,
       sentence,
       sentenceKey: normalizeText(sentence || word),
       prevSentence: normalizeText(context.prevSentence),
@@ -457,7 +467,15 @@
       isStage2Enabled: enableStage2Reranker,
       isStage2Loading: false,
       feedback: '',
-      feedbackType: 'info'
+      feedbackType: 'info',
+      currentAnalysis: null,
+      currentAnalysisLanguage: null,
+      geminiMatchedGroupIndex: null,
+      geminiMatchedItemIndex: null,
+      geminiMatchedDefIndex: null,
+      geminiMatchesByGroup: null,
+      geminiMatchedBase: null,
+      geminiMatchedSurface: null
     };
   }
 
@@ -696,7 +714,12 @@
       return;
     }
 
-    if (state.geminiMatchedItemIndex !== null || (typeof sentenceAnalysisCache !== 'undefined' && sentenceAnalysisCache.has(state.sentenceKey))) {
+    const hasCachedAnalysis = Boolean(
+      (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+        ? window.MunmekUI.getGeminiAnalysisForState(state, sentenceAnalysisCache)
+        : null
+    );
+    if (state.geminiMatchedItemIndex !== null || hasCachedAnalysis) {
       if (currentHoverState) {
         currentHoverState.isStage2Loading = false;
         rerenderCurrentTooltip();
@@ -908,21 +931,24 @@
         : 'English';
 
       // Check if we have cached analysis for this target language!
-      const langKey = `${currentHoverState.sentenceKey}__${targetLang}`;
-      if (sentenceAnalysisCache.has(langKey)) {
-        const cached = sentenceAnalysisCache.get(langKey);
+      const cached = (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+        ? window.MunmekUI.getGeminiAnalysisForState(currentHoverState, sentenceAnalysisCache)
+        : null;
+
+      if (cached) {
         currentHoverState.currentAnalysis = cached;
         currentHoverState.currentAnalysisLanguage = targetLang;
         if (window.MunmekUI) window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, cached);
-      } else if (targetLang === 'English' && sentenceAnalysisCache.has(currentHoverState.sentenceKey)) {
-        const cached = sentenceAnalysisCache.get(currentHoverState.sentenceKey);
-        currentHoverState.currentAnalysis = cached;
-        currentHoverState.currentAnalysisLanguage = 'English';
-        if (window.MunmekUI) window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, cached);
       } else {
-        // If no analysis for this language yet, re-evaluate so no badge is placed for non-matching language
-        if (currentHoverState.currentAnalysis && window.MunmekUI) {
-          window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, currentHoverState.currentAnalysis);
+        currentHoverState.currentAnalysis = null;
+        currentHoverState.currentAnalysisLanguage = null;
+        currentHoverState.geminiMatchedGroupIndex = null;
+        currentHoverState.geminiMatchedItemIndex = null;
+        currentHoverState.geminiMatchedDefIndex = null;
+        currentHoverState.geminiMatchesByGroup = null;
+        currentHoverState.geminiMatchedBase = null;
+        if (window.MunmekUI) {
+          window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, null);
         }
       }
 
@@ -993,7 +1019,9 @@
       respEl.style.display = 'block';
       respEl.textContent = 'Thinking...';
 
-      const cachedAnalysis = sentenceAnalysisCache.get(currentHoverState.sentenceKey);
+      const cachedAnalysis = (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+        ? window.MunmekUI.getGeminiAnalysisForState(currentHoverState, sentenceAnalysisCache)
+        : (currentHoverState.currentAnalysis || null);
 
       chrome.runtime.sendMessage({
         type: 'askGeminiFollowup',
@@ -1024,7 +1052,9 @@
     }
 
     if (action === 'anki-llm') {
-      const cachedAnalysis = sentenceAnalysisCache.get(currentHoverState.sentenceKey);
+      const cachedAnalysis = (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+        ? window.MunmekUI.getGeminiAnalysisForState(currentHoverState, sentenceAnalysisCache)
+        : (currentHoverState.currentAnalysis || null);
       if (cachedAnalysis || currentHoverState.quickFallback) {
         sendCardToAnki(currentHoverState, null, 'llm');
       } else {
@@ -1126,28 +1156,44 @@
       ? window.MunmekUI.getDictionaryLanguage(activeGroup)
       : 'English');
 
-    const cacheLangKey = `${state.sentenceKey}__${resolvedLang}`;
+    const wordKey = normalizeText(state.word || '');
+    const matchKey = normalizeText(state.dictionaryMatch || '');
+    const cacheLangKey = wordKey
+      ? `${wordKey}__${state.sentenceKey}__${resolvedLang}`
+      : `${state.sentenceKey}__${resolvedLang}`;
 
     if (forceRefresh && state.sentenceKey) {
-      sentenceAnalysisCache.delete(cacheLangKey);
-      if (resolvedLang === 'English') {
-        sentenceAnalysisCache.delete(state.sentenceKey);
+      if (wordKey) {
+        sentenceAnalysisCache.delete(`${wordKey}__${state.sentenceKey}__${resolvedLang}`);
+        if (resolvedLang === 'English') {
+          sentenceAnalysisCache.delete(`${wordKey}__${state.sentenceKey}`);
+        }
+      }
+      if (matchKey && matchKey !== wordKey) {
+        sentenceAnalysisCache.delete(`${matchKey}__${state.sentenceKey}__${resolvedLang}`);
+        if (resolvedLang === 'English') {
+          sentenceAnalysisCache.delete(`${matchKey}__${state.sentenceKey}`);
+        }
       }
     }
 
-    if (!forceRefresh && sentenceAnalysisCache.has(cacheLangKey) && !pendingAnalysisRequests.has(cacheLangKey)) {
-      const cached = sentenceAnalysisCache.get(cacheLangKey);
+    let cached = null;
+    let cachedLang = resolvedLang;
+    if (!forceRefresh && wordKey && sentenceAnalysisCache.has(cacheLangKey) && !pendingAnalysisRequests.has(cacheLangKey)) {
+      cached = sentenceAnalysisCache.get(cacheLangKey);
+    } else if (!forceRefresh && matchKey && sentenceAnalysisCache.has(`${matchKey}__${state.sentenceKey}__${resolvedLang}`) && !pendingAnalysisRequests.has(`${matchKey}__${state.sentenceKey}__${resolvedLang}`)) {
+      cached = sentenceAnalysisCache.get(`${matchKey}__${state.sentenceKey}__${resolvedLang}`);
+    } else if (!forceRefresh && resolvedLang === 'English' && wordKey && sentenceAnalysisCache.has(`${wordKey}__${state.sentenceKey}`) && !pendingAnalysisRequests.has(`${wordKey}__${state.sentenceKey}`)) {
+      cached = sentenceAnalysisCache.get(`${wordKey}__${state.sentenceKey}`);
+      cachedLang = 'English';
+    } else if (!forceRefresh && resolvedLang === 'English' && matchKey && sentenceAnalysisCache.has(`${matchKey}__${state.sentenceKey}`) && !pendingAnalysisRequests.has(`${matchKey}__${state.sentenceKey}`)) {
+      cached = sentenceAnalysisCache.get(`${matchKey}__${state.sentenceKey}`);
+      cachedLang = 'English';
+    }
+
+    if (cached) {
       state.currentAnalysis = cached;
-      state.currentAnalysisLanguage = resolvedLang;
-      autoSelectBestDefinitionFromGemini(state, cached);
-      currentHoverState.feedback = '';
-      rerenderCurrentTooltip();
-      if (typeof onSuccess === 'function') onSuccess();
-      return;
-    } else if (!forceRefresh && resolvedLang === 'English' && sentenceAnalysisCache.has(state.sentenceKey) && !pendingAnalysisRequests.has(state.sentenceKey)) {
-      const cached = sentenceAnalysisCache.get(state.sentenceKey);
-      state.currentAnalysis = cached;
-      state.currentAnalysisLanguage = 'English';
+      state.currentAnalysisLanguage = cachedLang;
       autoSelectBestDefinitionFromGemini(state, cached);
       currentHoverState.feedback = '';
       rerenderCurrentTooltip();
@@ -1155,7 +1201,7 @@
       return;
     }
 
-    if (pendingAnalysisRequests.has(cacheLangKey) || pendingAnalysisRequests.has(state.sentenceKey)) {
+    if (pendingAnalysisRequests.has(cacheLangKey)) {
       currentHoverState.feedback = `LLM analysis (${resolvedLang}) is already in progress.`;
       currentHoverState.feedbackType = 'info';
       rerenderCurrentTooltip();
@@ -1164,8 +1210,12 @@
 
     pendingAnalysisRequests.set(cacheLangKey, true);
 
+    const targetWordForAi = state.originalHoverWord || state.word;
+
     console.log('[Munmek SubtitleContextSent]', {
-      word: state.word,
+      word: targetWordForAi,
+      candidate: state.dictionaryMatch,
+      originalHoverWord: state.originalHoverWord,
       sentence: state.sentence,
       prevSentence: state.prevSentence || '(none)',
       prevSentence2: state.prevSentence2 || '(none)',
@@ -1181,7 +1231,7 @@
       {
         type: 'analyzeSentence',
         data: {
-          word: state.word,
+          word: targetWordForAi,
           sentence: state.sentence,
           prevSentence: state.prevSentence,
           prevSentence2: state.prevSentence2,
@@ -1219,15 +1269,31 @@
           }
         }
 
-        boundedMapSet(sentenceAnalysisCache, cacheLangKey, resData, 200);
-        if (resolvedLang === 'English') {
-          boundedMapSet(sentenceAnalysisCache, state.sentenceKey, resData, 200);
-        }
-        const wordKey = normalizeText(state.word || '');
+        const aiWordKey = normalizeText(targetWordForAi || '');
+        const hoverWordKey = normalizeText(state.originalHoverWord || '');
+
         if (wordKey) {
-          boundedMapSet(sentenceAnalysisCache, `${wordKey}__${cacheLangKey}`, resData, 200);
+          boundedMapSet(sentenceAnalysisCache, `${wordKey}__${state.sentenceKey}__${resolvedLang}`, resData, 200);
           if (resolvedLang === 'English') {
             boundedMapSet(sentenceAnalysisCache, `${wordKey}__${state.sentenceKey}`, resData, 200);
+          }
+        }
+        if (aiWordKey && aiWordKey !== wordKey) {
+          boundedMapSet(sentenceAnalysisCache, `${aiWordKey}__${state.sentenceKey}__${resolvedLang}`, resData, 200);
+          if (resolvedLang === 'English') {
+            boundedMapSet(sentenceAnalysisCache, `${aiWordKey}__${state.sentenceKey}`, resData, 200);
+          }
+        }
+        if (hoverWordKey && hoverWordKey !== wordKey && hoverWordKey !== aiWordKey) {
+          boundedMapSet(sentenceAnalysisCache, `${hoverWordKey}__${state.sentenceKey}__${resolvedLang}`, resData, 200);
+          if (resolvedLang === 'English') {
+            boundedMapSet(sentenceAnalysisCache, `${hoverWordKey}__${state.sentenceKey}`, resData, 200);
+          }
+        }
+        if (matchKey && matchKey !== wordKey && matchKey !== aiWordKey) {
+          boundedMapSet(sentenceAnalysisCache, `${matchKey}__${state.sentenceKey}__${resolvedLang}`, resData, 200);
+          if (resolvedLang === 'English') {
+            boundedMapSet(sentenceAnalysisCache, `${matchKey}__${state.sentenceKey}`, resData, 200);
           }
         }
 
@@ -1253,27 +1319,54 @@
         rerankDebounceTimer = null;
       }
 
-      if (state.geminiMatchedBase) {
+      if (state.geminiMatchedBase || state.geminiMatchedSurface) {
         const cleanHelper = (window.MunmekUI && window.MunmekUI.cleanKoreanLemma) ||
                             (window.MunmekUI && window.MunmekUI.cleanKoreanWord) ||
                             (w => String(w || '').trim());
-        const cleanTarget = cleanHelper(state.geminiMatchedBase);
-        const cleanCurrentMatch = cleanHelper(state.dictionaryMatch);
+        const cleanTarget = cleanHelper(state.geminiMatchedBase || '');
+        const cleanSurfaceTarget = cleanHelper(state.geminiMatchedSurface || '');
+        const cleanCurrentMatch = cleanHelper(state.dictionaryMatch || '');
 
-        if (cleanTarget && cleanTarget !== cleanCurrentMatch) {
-          let matchingCand = (state.candidateList || []).find(c => {
+        let matchingCand = null;
+
+        // 1. Check for candidate matching LLM target base (e.g. 떠나다)
+        if (cleanTarget) {
+          matchingCand = (state.candidateList || []).find(c => {
             const cText = c.text || '';
             const cStem = c.stem || '';
             return cText === cleanTarget || cStem === cleanTarget ||
                    cleanHelper(cText) === cleanTarget || cleanHelper(cStem) === cleanTarget;
           });
+        }
 
-          if (!matchingCand) {
-            matchingCand = { text: cleanTarget, score: 96, posHint: 'verb/noun', reason: 'LLM Matched Base' };
-            if (!Array.isArray(state.candidateList)) state.candidateList = [];
-            state.candidateList.unshift(matchingCand);
+        // 2. Check for candidate matching LLM target surface (e.g. 말이야)
+        if (!matchingCand && cleanSurfaceTarget) {
+          matchingCand = (state.candidateList || []).find(c => {
+            const cText = c.text || '';
+            return cText === cleanSurfaceTarget || cleanHelper(cText) === cleanSurfaceTarget;
+          });
+        }
+
+        // 3. If missing from candidate list, inject LLM base form as candidate (preserving 떠나다 injection)
+        if (!matchingCand && cleanTarget) {
+          matchingCand = { text: cleanTarget, score: 96, posHint: 'verb/noun', reason: 'LLM Matched Base', isLlmInjected: true };
+          if (!Array.isArray(state.candidateList)) state.candidateList = [];
+          state.candidateList.unshift(matchingCand);
+        }
+
+        if (matchingCand) {
+          const originalSurface = state.originalHoverWord || state.word;
+          if (originalSurface) {
+            const existingLlmCandidates = llmDiscoveredCandidates.get(originalSurface) || [];
+            if (!existingLlmCandidates.find(c => c.text === matchingCand.text)) {
+              existingLlmCandidates.push(matchingCand);
+              boundedMapSet(llmDiscoveredCandidates, originalSurface, existingLlmCandidates, 200);
+            }
           }
-          switchCandidateForm(state, matchingCand.text);
+
+          if (cleanHelper(matchingCand.text) !== cleanCurrentMatch) {
+            switchCandidateForm(state, matchingCand.text);
+          }
         }
       }
     }
@@ -1296,11 +1389,15 @@
         dictId: currentSelectedDictionaryId
       }, (res) => {
         if (res && res.hits && res.hits.length > 0 && state) {
+          if (!state.verifiedDictionaryCandidates) state.verifiedDictionaryCandidates = new Set();
+          state.verifiedDictionaryCandidates.add(selectedCandidate);
           let sortedHits = sortHitsByBaseForm(res.hits);
           state.dictionaryEntries = sortedHits;
           state.dictionaryEntry = sortedHits[0];
           state.lookupReason = `LLM Matched (${res.hits[0].dictTitle || 'Local'})`;
-          const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey);
+          const cachedAnalysis = (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+            ? window.MunmekUI.getGeminiAnalysisForState(state, sentenceAnalysisCache)
+            : null;
           if (cachedAnalysis && window.MunmekUI) {
             window.MunmekUI.autoSelectBestDefinitionFromGemini(state, cachedAnalysis);
           }
@@ -1313,11 +1410,15 @@
             dictId: currentSelectedDictionaryId
           }, (resBase) => {
             if (resBase && resBase.hits && resBase.hits.length > 0 && state) {
+              if (!state.verifiedDictionaryCandidates) state.verifiedDictionaryCandidates = new Set();
+              state.verifiedDictionaryCandidates.add(selectedCandidate);
               let sortedHits = sortHitsByBaseForm(resBase.hits);
               state.dictionaryEntries = sortedHits;
               state.dictionaryEntry = sortedHits[0];
               state.lookupReason = `LLM Matched (${resBase.hits[0].dictTitle || 'Local'})`;
-              const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey);
+              const cachedAnalysis = (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+                ? window.MunmekUI.getGeminiAnalysisForState(state, sentenceAnalysisCache)
+                : null;
               if (cachedAnalysis && window.MunmekUI) {
                 window.MunmekUI.autoSelectBestDefinitionFromGemini(state, cachedAnalysis);
               }
@@ -1335,7 +1436,9 @@
   }
 
   function sendCardToAnki(state, selectedDefinition = null, mode = 'dict') {
-    const cachedAnalysis = sentenceAnalysisCache.get(state.sentenceKey) || null;
+    const cachedAnalysis = (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+      ? window.MunmekUI.getGeminiAnalysisForState(state, sentenceAnalysisCache)
+      : (state.currentAnalysis || null);
 
     currentHoverState.feedback = 'Sending card to Anki...';
     currentHoverState.feedbackType = 'info';
@@ -1411,6 +1514,8 @@
     episodeNumber: null,
     episodeTitle: '',
     synopsis: '',
+    episodeSynopsis: '',
+    showSynopsis: '',
     netflixId: ''
   };
 
@@ -1551,32 +1656,37 @@
         }
       }
 
-      // 4. Scrape direct synopsis from Netflix DOM or JSON-LD
-      let directSynopsis = '';
-      const synopsisEl = document.querySelector('.previewModal--synopsis, .synopsis, [data-uia="episode-synopsis"], .titleDescription--synopsis, .episode-synopsis, [data-uia="video-synopsis"], .ltr-191i9y8, .about-synopsis');
-      if (synopsisEl && synopsisEl.textContent) {
-        directSynopsis = synopsisEl.textContent.trim();
+      // 4. Scrape direct episode and show synopsis from Netflix DOM or JSON-LD
+      let episodeSynopsis = '';
+      let showSynopsis = '';
+
+      // Check player overlay / paused player synopsis elements specifically for episode summary
+      const epSynopsisEl = document.querySelector('[data-uia="episode-synopsis"], .episode-synopsis, [data-uia="video-synopsis"], [data-uia="control-header-synopsis"], .evidence-overlay, .watch-video--evidence-overlay-text, .previewModal--synopsis, .titleDescription--synopsis');
+      if (epSynopsisEl && epSynopsisEl.textContent) {
+        episodeSynopsis = epSynopsisEl.textContent.trim();
       }
 
-      if (!directSynopsis) {
-        const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-        for (const script of jsonLdScripts) {
-          try {
-            const parsed = JSON.parse(script.textContent || '{}');
-            if (parsed.description) {
-              directSynopsis = parsed.description.trim();
-              if (!title && parsed.name) title = parsed.name.trim();
-              break;
-            }
-          } catch (e) {}
-        }
+      const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+      for (const script of jsonLdScripts) {
+        try {
+          const parsed = JSON.parse(script.textContent || '{}');
+          if (parsed.description) {
+            showSynopsis = parsed.description.trim();
+            if (!title && parsed.name) title = parsed.name.trim();
+            break;
+          }
+        } catch (e) {}
       }
+
+      const directSynopsis = episodeSynopsis || showSynopsis;
 
       // Fall back to persistent cache if current state is missing values
       if (!title && lastKnownNetflixMeta.title) title = lastKnownNetflixMeta.title;
       if (!seasonNumber && lastKnownNetflixMeta.seasonNumber) seasonNumber = lastKnownNetflixMeta.seasonNumber;
       if (!episodeNumber && lastKnownNetflixMeta.episodeNumber) episodeNumber = lastKnownNetflixMeta.episodeNumber;
       if (!epText && lastKnownNetflixMeta.episodeTitle) epText = lastKnownNetflixMeta.episodeTitle;
+      if (!episodeSynopsis && lastKnownNetflixMeta.episodeSynopsis) episodeSynopsis = lastKnownNetflixMeta.episodeSynopsis;
+      if (!showSynopsis && lastKnownNetflixMeta.showSynopsis) showSynopsis = lastKnownNetflixMeta.showSynopsis;
       if (!directSynopsis && lastKnownNetflixMeta.synopsis) directSynopsis = lastKnownNetflixMeta.synopsis;
 
       // Update persistent cache with any newly discovered values
@@ -1584,6 +1694,8 @@
       if (seasonNumber) lastKnownNetflixMeta.seasonNumber = seasonNumber;
       if (episodeNumber) lastKnownNetflixMeta.episodeNumber = episodeNumber;
       if (epText) lastKnownNetflixMeta.episodeTitle = epText;
+      if (episodeSynopsis) lastKnownNetflixMeta.episodeSynopsis = episodeSynopsis;
+      if (showSynopsis) lastKnownNetflixMeta.showSynopsis = showSynopsis;
       if (directSynopsis) lastKnownNetflixMeta.synopsis = directSynopsis;
 
       const subText = subtitleHistoryBuffer.slice(-12).join(' ');
@@ -1598,9 +1710,11 @@
           episodeNumber,
           episodeTitle: epText,
           synopsis: directSynopsis,
+          episodeSynopsis,
+          showSynopsis,
           hasDirectSynopsis: Boolean(directSynopsis),
           subtitles: subText,
-          pageDetails: `${epText} ${directSynopsis}`.trim()
+          pageDetails: `${epText} ${episodeSynopsis || showSynopsis}`.trim()
         },
         text: `${title} ${epText} ${directSynopsis} ${subText}`.trim()
       };

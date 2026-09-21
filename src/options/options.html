@@ -166,9 +166,28 @@ Return JSON with "words_analysis": [{
   "id": "1"
 }]</div>
 
-        <label for="aiPromptExtension" style="margin-top: 16px;">Additional User Prompt Instructions (Persona & Custom Rules)</label>
-        <div class="hint">Appended to the system prompt. Add extra rules here (e.g. <code>Also append a Japanese translation to definitions</code> or <code>Add a "cultural_context" field</code>). Custom JSON fields added here automatically become available as Anki field mapping placeholders!</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+          <label for="aiPromptExtension" style="margin: 0;">Additional User Prompt Instructions (Persona & Rules Only)</label>
+          <button type="button" id="loadExamplePromptBtn" style="font-size: 0.8rem; padding: 4px 10px; background: #e8e3d9; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-weight: 600;">Fill Default Example</button>
+        </div>
+        <div class="hint">
+          Appended to prompt instructions. Use this strictly for natural instructions, style, persona, and rules (e.g. <code>Speak conversationally</code> or <code>Explain honorific nuances in detail</code>).
+          <br>
+          <em>Note: Structured custom data fields should not be written here — define them below in <strong>Custom LLM Response Fields</strong> so they can be mapped to Anki notes cleanly.</em>
+        </div>
         <textarea id="aiPromptExtension" placeholder="Add custom style constraints or instructions here..."></textarea>
+
+        <div style="margin-top: 20px; border-top: 1px dashed var(--line); padding-top: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-weight: 700; margin: 0;">Custom LLM Response Fields</label>
+            <button type="button" id="addCustomFieldBtn" style="font-size: 0.8rem; padding: 5px 12px; background: #2f5d62; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: 700;">+ Add Custom Field</button>
+          </div>
+          <div class="hint" style="margin-bottom: 12px;">
+            Define custom JSON fields you want the LLM to output (e.g. <code>japanese_translation</code>, <code>cultural_nuance</code>).
+            Each field is directly embedded into the model's output schema and is immediately available below for Anki Card Export Mapping!
+          </div>
+          <div id="customFieldsContainer" style="display: flex; flex-direction: column; gap: 8px;"></div>
+        </div>
 
       </section>
 
@@ -315,7 +334,7 @@ Return JSON with "words_analysis": [{
           </div>
 
           <label style="font-weight: 700; margin-top: 10px; display: block;">Interactive Field Mapping</label>
-          <div class="hint">Assign Munmek values to your Anki note fields. Custom keys added via user prompt instructions above can also be mapped!</div>
+          <div class="hint">Assign Munmek values to your Anki note fields. Custom fields configured above appear here immediately as mapping options!</div>
           <div id="ankiDynamicFieldsContainer" style="display: grid; gap: 10px; margin-top: 10px; background: #faf7f2; padding: 14px; border-radius: 14px; border: 1px solid var(--line);"></div>
 
           <textarea id="ankiFieldMapping" spellcheck="false" style="display: none;"></textarea>
@@ -326,7 +345,7 @@ Return JSON with "words_analysis": [{
 
     <div class="toolbar">
       <button id="save">Save Settings</button>
-      <button id="reset" type="button" style="background:#6c6458;">Reset to Defaults</button>
+      <button id="reset" type="button" style="background:#b91c1c; color:#fff;">Reset All Settings to Defaults</button>
     </div>
     <div id="status"></div>
   </div>
