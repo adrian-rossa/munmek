@@ -12,24 +12,42 @@ function ensureDictionaryDbLoaded() {
 }
 ensureDictionaryDbLoaded();
 
+function ensureSenseRerankerLoaded() {
+  if (typeof self !== 'undefined' && typeof self.SenseRerankerAdapters !== 'undefined') return true;
+  if (typeof globalThis !== 'undefined' && typeof globalThis.SenseRerankerAdapters !== 'undefined') return true;
+  try {
+    if (typeof importScripts === 'function') {
+      importScripts('../nlp/sense_reranker_adapters.js');
+    }
+    return (typeof self !== 'undefined' && typeof self.SenseRerankerAdapters !== 'undefined') || (typeof globalThis !== 'undefined' && typeof globalThis.SenseRerankerAdapters !== 'undefined');
+  } catch (e) {
+    return false;
+  }
+}
+ensureSenseRerankerLoaded();
+
 const DEFAULT_MODEL_ID = 'gemini-flash-lite-latest';
 const DEFAULT_PROMPT = `Return ONLY valid JSON (no markdown backticks or commentary).
 
-Analyze the Korean word '{WORD}' in sentence: '{SENTENCE}'
-Context - Preceding (−1): '{PREV_SENTENCE}' | Preceding (−2): '{PREV_SENTENCE2}'{CANDIDATE_LINE}
+Analyze the Korean word '{WORD}'.
+{DIALOGUE_CONTEXT}Sentence: '{SENTENCE}'
+{CANDIDATE_LINE}
 
 Rules:
 1. If '{WORD}' is a person's name or proper noun in context (e.g. before ~이에요/~예요/~야/~아/~씨/~님), set "pos": "proper noun" and definition to the name rather than forcing a dictionary homonym.
 2. For "base", provide ONLY the clean Korean dictionary citation form (e.g. "부르다", NOT "부르다 (to call)"). Do not include English glosses, notes, or parentheses in "base".
-3. Ground "grammar_notes" in the actual context of the surrounding sentences and scene.
+3. Disambiguate short homonyms (e.g., 차 [tea vs car], 배 [boat vs belly vs pear], 말 [speech vs horse], 눈 [eye vs snow]) strictly using immediate collocations (e.g., 한잔/마시다 -> tea; 타다/운전하다 -> vehicle) and surrounding dialogue flow.
+4. In "conjugation", break down grammar in context: [Word] + [Ending] = [Meaning in this sentence]. Use sentence and dialogue context whenever relevant to explain the specific grammatical nuance or politeness level.
+5. If Preceding Dialogue Context is present, write 1-2 concise sentences in "dialogue_nuance" explaining the speaker's tone, attitude, or reaction to the dialogue. Omit if no dialogue context.
 
 Return JSON with "words_analysis": [{
   "surface": "{WORD}",
   "base": "clean Korean citation lemma without English gloss or parentheses (e.g. 부르다)",
   "pos": "part of speech",
   "definitions": ["definition in context"],
-  "conjugation": { "ending": "...", "explanation": "..." },
-  "grammar_notes": "contextual breakdown based on scene/sentence context",
+  "conjugation": { "ending": "...", "explanation": "building-block grammar in context" },
+  "dialogue_nuance": "tone and reaction to preceding dialogue (1-2 sentences)",
+  "grammar_notes": "additional notes if needed",
   "id": "1"
 }]`;
 
@@ -38,7 +56,7 @@ const DEFAULT_AI_PROMPT_EXTENSION = `You are an expert Korean linguistic assista
 Rules:
 1. Break grammar down like simple math: [Word] + [Ending/Particle] = [Function/Meaning].
 2. Avoid complex linguistic terms. Use simple labels that explain the function and real meaning of the building blocks (e.g., "Topic Marker", "Direction Marker", "Connector").
-3. Explain ONLY the meaning relevant to the given sentence context. Make sure to use the context if it helps explaining.
+3. Explain grammar using the sentence context. When preceding dialogue is provided, also capture the conversational tone and reaction.
 4. Keep bullets short and concise and avoid dense Western grammar jargon. Explain the language logically on its own terms.`;
 
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalled) {
@@ -356,14 +374,90 @@ function handleRerankCandidatesRequest(candidates, sentenceContext, sendResponse
 
 function handleRerankDictionaryEntriesRequest(entries, sentenceContext, word, sendResponse, requestData = {}) {
   const tBgRecv = Date.now();
-  chrome.storage.local.get(['enableOnnxReranker', 'enableWebGpu'], async (result) => {
-    const isEnabled = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : false;
-    const enableWebGpu = typeof result.enableWebGpu === 'boolean' ? result.enableWebGpu : false;
-    if (!isEnabled) {
+  chrome.storage.local.get([
+    'stage2Provider',
+    'enableOnnxReranker',
+    'enableWebGpu',
+    'customEndpointUrl',
+    'customModelId',
+    'customApiKey',
+    'systemOneEndpointUrl',
+    'systemOneApiKey'
+  ], async (result) => {
+    let provider = requestData.provider || result.stage2Provider;
+    if (!provider) {
+      provider = result.enableOnnxReranker ? 'onnx' : 'off';
+    }
+
+    if (provider === 'off') {
       sendResponse({ ok: true, entries: entries || [], disabled: true });
       return;
     }
 
+    ensureSenseRerankerLoaded();
+    const adapters = (typeof globalThis !== 'undefined' && globalThis.SenseRerankerAdapters) ||
+                     (typeof self !== 'undefined' && self.SenseRerankerAdapters) ||
+                     null;
+
+    // Option C: Local LLM Chat / Logprob Reranking
+    if (provider === 'local_llm' && adapters && typeof adapters.rerankWithLocalLlmChat === 'function') {
+      try {
+        console.log(`[Munmek Background] [t=${tBgRecv}] Dispatching Stage 2 Local LLM rerank for '${word}'`);
+        const reranked = await adapters.rerankWithLocalLlmChat(entries, sentenceContext, word, {
+          customEndpointUrl: result.customEndpointUrl,
+          customModelId: result.customModelId,
+          customApiKey: result.customApiKey,
+          surfaceWord: requestData.surfaceWord || word
+        });
+        const bgTotalMs = Date.now() - tBgRecv;
+        console.log(`[Munmek Background Timer] Stage 2 Local LLM Rerank for '${word}' completed in ${bgTotalMs} ms`);
+        sendResponse({
+          ok: true,
+          entries: reranked,
+          offscreenMs: bgTotalMs,
+          activeProvider: 'Local LLM (Option C)',
+          t_sent: requestData.t_sent || null,
+          t_bg_recv: tBgRecv,
+          t_bg_finished: Date.now(),
+          bgTotalMs
+        });
+      } catch (err) {
+        console.warn('[Munmek Background] Local LLM sense rerank error:', err);
+        sendResponse({ ok: false, error: err.message, entries: entries || [] });
+      }
+      return;
+    }
+
+    // Option A & B: System One Protocol (Verdict, thecodacus, TypeSafe Jev)
+    if (provider === 'system_one' && adapters && typeof adapters.rerankWithSystemOne === 'function') {
+      try {
+        console.log(`[Munmek Background] [t=${tBgRecv}] Dispatching Stage 2 System One rerank for '${word}'`);
+        const reranked = await adapters.rerankWithSystemOne(entries, sentenceContext, word, {
+          systemOneEndpointUrl: result.systemOneEndpointUrl,
+          systemOneApiKey: result.systemOneApiKey,
+          surfaceWord: requestData.surfaceWord || word
+        });
+        const bgTotalMs = Date.now() - tBgRecv;
+        console.log(`[Munmek Background Timer] Stage 2 System One Rerank for '${word}' completed in ${bgTotalMs} ms`);
+        sendResponse({
+          ok: true,
+          entries: reranked,
+          offscreenMs: bgTotalMs,
+          activeProvider: 'System One (Option A/B)',
+          t_sent: requestData.t_sent || null,
+          t_bg_recv: tBgRecv,
+          t_bg_finished: Date.now(),
+          bgTotalMs
+        });
+      } catch (err) {
+        console.warn('[Munmek Background] System One sense rerank error:', err);
+        sendResponse({ ok: false, error: err.message, entries: entries || [] });
+      }
+      return;
+    }
+
+    // Default: Multilingual E5 ONNX via Offscreen Document
+    const enableWebGpu = typeof result.enableWebGpu === 'boolean' ? result.enableWebGpu : false;
     try {
       const tBgSentOffscreen = Date.now();
       console.log(`[Munmek Background] [t=${tBgRecv}] Forwarding Stage 2 ONNX rerank request to offscreen document (enableWebGpu=${enableWebGpu}):`, { word, sentenceContext });
@@ -687,10 +781,24 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
         candidateLine = `\nCandidate Under Review: '${candidate}' (Verify if '${candidate}' is a true constituent of '${word}'. If it is a spurious or false slice that does not match '${word}', disregard it and analyze the correct base form of '${word}').`;
       }
 
+      let dialogueContext = '';
+      if (Array.isArray(data.contextLines) && data.contextLines.length > 0) {
+        const lines = data.contextLines.filter(Boolean);
+        if (lines.length > 0) {
+          dialogueContext = `Preceding Dialogue Context:\n${lines.map((l, i) => `${i + 1}. ${l}`).join('\n')}\n`;
+        }
+      } else if (data.prevSentence || data.prevSentence2) {
+        const lines = [data.prevSentence2, data.prevSentence].filter(Boolean);
+        if (lines.length > 0) {
+          dialogueContext = `Preceding Dialogue Context:\n${lines.map((l, i) => `${i + 1}. ${l}`).join('\n')}\n`;
+        }
+      }
+
       let systemInstruction = 'You are a precise Korean language assistant.';
       let promptText = DEFAULT_PROMPT
         .replace(/{WORD}/g, word)
         .replace('{SENTENCE}', data.sentence || '')
+        .replace('{DIALOGUE_CONTEXT}', dialogueContext)
         .replace('{PREV_SENTENCE}', data.prevSentence || '')
         .replace('{PREV_SENTENCE2}', data.prevSentence2 || '')
         .replace('{CANDIDATE_LINE}', candidateLine);
@@ -735,6 +843,16 @@ function handleSentenceAnalysisRequest(data, sendResponse, sender) {
         systemInstruction += ` Additional user instruction: ${ext}`;
         promptText += `\n\nUser Instruction: ${ext}`;
       }
+
+      console.log('[Munmek AI Request Prompt Built]', {
+        word,
+        sentence: data.sentence,
+        dialogueContextLines: Array.isArray(data.contextLines) ? data.contextLines : [],
+        dialogueContextCount: Array.isArray(data.contextLines) ? data.contextLines.length : 0,
+        formattedDialogueContext: dialogueContext.trim(),
+        targetLang: targetLangStr,
+        promptPreview: promptText.slice(0, 320) + '...'
+      });
 
       const parsedData = await callAiChatCompletion({
         promptText,
@@ -813,14 +931,28 @@ function handleQuickGeminiFallback(data, sendResponse, sender) {
         targetLangStr = data.responseLanguage.trim();
       }
 
-      let prompt = `Return ONLY valid JSON (no markdown backticks or commentary): {"definitions":["definition in ${targetLangStr}"],"pos":"part of speech","grammar_notes":"usage note"}
+      let prompt = `Return ONLY valid JSON (no markdown backticks or commentary): {"definitions":["definition in ${targetLangStr}"],"pos":"part of speech","base":"clean Korean dictionary citation lemma without parentheses or English gloss (e.g. 주다, 어떠하다)","grammar_notes":"usage note"}
 Analyze the Korean word '${data.word}' in sentence: '${data.sentence || ''}'`;
+
+      if (Array.isArray(data.contextLines) && data.contextLines.length > 0) {
+        prompt += `\nPreceding Dialogue:\n${data.contextLines.filter(Boolean).map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
+      } else if (data.prevSentence || data.prevSentence2) {
+        const lines = [data.prevSentence2, data.prevSentence].filter(Boolean);
+        if (lines.length > 0) prompt += `\nPreceding Dialogue:\n${lines.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
+      }
 
       if (activeCtx && (activeCtx.summary || activeCtx.text)) {
         prompt += `\nMedia Context: ${(activeCtx.summary || activeCtx.text).trim()}`;
       }
 
       const systemInstruction = `You are a concise Korean vocabulary assistant. Always respond in valid JSON format only. All explanations in ${targetLangStr}.`;
+
+      console.log('[Munmek Quick Fallback Prompt Built]', {
+        word: data.word,
+        sentence: data.sentence,
+        contextLines: Array.isArray(data.contextLines) ? data.contextLines : [],
+        promptPreview: prompt.slice(0, 320) + '...'
+      });
 
       const parsed = await callAiChatCompletion({
         promptText: prompt,
@@ -1065,13 +1197,16 @@ function handleAnkiCardRequest(data, sendResponse) {
       const prevSentence = data.prevSentence || '';
       const prevSentence2 = data.prevSentence2 || '';
 
+      let dialogueNuance = '';
       if (Array.isArray(analysis.words_analysis) && analysis.words_analysis[0]) {
         const w0 = analysis.words_analysis[0];
         if (!grammar && (w0.grammar_notes || w0.grammar)) grammar = w0.grammar_notes || w0.grammar;
+        if (w0.dialogue_nuance) dialogueNuance = w0.dialogue_nuance;
         if (!translation && w0.translation) translation = w0.translation;
         if (!pos && w0.pos) pos = w0.pos;
         if (!hanja && w0.hanja) hanja = w0.hanja;
       }
+      if (!dialogueNuance && analysis.dialogue_nuance) dialogueNuance = analysis.dialogue_nuance;
 
       let fields = {};
       if (config.ankiFieldMapping) {
@@ -1091,6 +1226,9 @@ function handleAnkiCardRequest(data, sendResponse) {
               .replace(/\{\{prevSentence2\}\}/g, prevSentence2)
               .replace(/\{\{grammar\}\}/g, grammar)
               .replace(/\{\{grammarNotes\}\}/g, grammar)
+              .replace(/\{\{dialogue_nuance\}\}/g, dialogueNuance)
+              .replace(/\{\{dialogueNuance\}\}/g, dialogueNuance)
+              .replace(/\{\{context_nuance\}\}/g, dialogueNuance)
               .replace(/\{\{pos\}\}/g, pos)
               .replace(/\{\{hanja\}\}/g, hanja)
               .replace(/\{\{reading\}\}/g, reading)
@@ -1174,24 +1312,42 @@ function handleAnkiCardRequest(data, sendResponse) {
   });
 }
 
+function cleanNetflixTitleString(rawTitle) {
+  if (!rawTitle) return '';
+  return String(rawTitle)
+    .replace(/[„“”"']/g, '')
+    .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
+    .replace(/\s*[\|\-·]\s*(?:Netflix|넷플릭스).*$/i, '')
+    .replace(/^(?:Watch|시청하기|Ansehen|Anschauen)\s+/i, '')
+    .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
+    .replace(/\s*[\|\-·:]+\s*$/g, '')
+    .trim();
+}
+
 function extractMetadataFromNetflixHtml(html) {
-  if (!html || typeof html !== 'string') return { title: '', synopsis: '' };
+  if (!html || typeof html !== 'string') return { title: '', synopsis: '', releaseYear: null };
   let title = '';
   let synopsis = '';
+  let releaseYear = null;
 
   const jsonLdMatches = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
   for (const m of jsonLdMatches) {
     try {
       const parsed = JSON.parse(m[1].trim());
-      if (parsed.name && !title) title = parsed.name;
+      if (parsed.name && !title) title = cleanNetflixTitleString(parsed.name);
       if (parsed.description && !synopsis) synopsis = parsed.description;
+      if (!releaseYear) {
+        const rawDate = parsed.startDate || parsed.dateCreated || parsed.releasedEvent?.startDate;
+        const yMatch = String(rawDate || '').match(/\b(19\d\d|20\d\d)\b/);
+        if (yMatch) releaseYear = parseInt(yMatch[1], 10);
+      }
     } catch (e) {}
   }
 
   if (!title) {
     const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
                     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
-    if (ogMatch) title = ogMatch[1].trim();
+    if (ogMatch) title = cleanNetflixTitleString(ogMatch[1]);
   }
 
   if (!synopsis) {
@@ -1200,40 +1356,97 @@ function extractMetadataFromNetflixHtml(html) {
     if (descMatch) synopsis = descMatch[1].trim();
   }
 
-  if (!title) {
-    const titleTagMatch = html.match(/<title>([^<]+)<\/title>/i);
-    if (titleTagMatch) {
-      title = titleTagMatch[1].replace(/\s*[\|\-·]\s*(Netflix|넷플릭스).*$/i, '').replace(/^(Watch|시청하기)\s+/i, '').trim();
+  if (!releaseYear) {
+    const metaYearMatch = html.match(/<meta[^>]+(?:property|name)=["'](?:og:release_date|video:release_date|release_date)["'][^>]+content=["'](\d{4})/i) ||
+                          html.match(/"releaseYear":\s*(\d{4})/i) ||
+                          html.match(/"year":\s*(\d{4})/i);
+    if (metaYearMatch) {
+      releaseYear = parseInt(metaYearMatch[1], 10);
     }
   }
 
-  return { title, synopsis };
+  if (!title) {
+    const titleTagMatch = html.match(/<title>([^<]+)<\/title>/i);
+    if (titleTagMatch) {
+      title = cleanNetflixTitleString(titleTagMatch[1]);
+    }
+  }
+
+  return { title, synopsis, releaseYear };
 }
 
-function matchBestTmdbResult(title, results) {
+function matchBestTmdbResult(title, results, options = {}) {
   if (!results || !Array.isArray(results) || results.length === 0) return null;
   const normTitle = (title || '').toLowerCase().replace(/[^a-z0-9가-힣ㄱ-ㅎㅏ-ㅣ\u3040-\u30ff\u4e00-\u9faf]/gi, '');
   if (!normTitle || normTitle.length < 2 || normTitle === 'netflix' || normTitle === '넷플릭스' || normTitle === 'netflixvideo') {
     return null;
   }
 
+  const { releaseYear, directSynopsis } = options;
+  let bestItem = null;
+  let bestScore = -Infinity;
+
   for (const item of results) {
     const itemTitle = (item.title || item.name || item.original_title || item.original_name || '').toLowerCase().replace(/[^a-z0-9가-힣ㄱ-ㅎㅏ-ㅣ\u3040-\u30ff\u4e00-\u9faf]/gi, '');
-    if (itemTitle && (itemTitle === normTitle || itemTitle.includes(normTitle) || normTitle.includes(itemTitle))) {
-      return item;
+    let score = 0;
+
+    // 1. Title match
+    if (itemTitle === normTitle) {
+      score += 60;
+    } else if (normTitle.includes(itemTitle) || itemTitle.includes(normTitle)) {
+      score += 35;
+    } else {
+      score -= 20;
+    }
+
+    // 2. Release Year match & penalty for remakes / different eras
+    const itemDateStr = item.first_air_date || item.release_date || '';
+    const itemYear = itemDateStr ? parseInt(itemDateStr.slice(0, 4), 10) : null;
+
+    if (releaseYear && itemYear) {
+      const diff = Math.abs(itemYear - releaseYear);
+      if (diff === 0) {
+        score += 100;
+      } else if (diff === 1) {
+        score += 80;
+      } else if (diff > 3) {
+        score -= 60; // Heavily penalize remakes of a different era
+      }
+    }
+
+    // 3. Direct Synopsis token overlap
+    if (directSynopsis && item.overview) {
+      const synTokens = new Set((directSynopsis.toLowerCase().match(/[a-z0-9가-힣]{3,}/gi) || []));
+      const overTokens = (item.overview.toLowerCase().match(/[a-z0-9가-힣]{3,}/gi) || []);
+      let overlapCount = 0;
+      for (const tok of overTokens) {
+        if (synTokens.has(tok)) overlapCount++;
+      }
+      score += Math.min(30, overlapCount * 4);
+    }
+
+    // 4. Vote count / Popularity tiebreaker
+    if (item.vote_count) {
+      score += Math.min(10, Math.log10(item.vote_count + 1) * 2.5);
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestItem = item;
     }
   }
-  return results[0];
+
+  return bestItem || results[0];
 }
 
-async function searchTmdbShowOrMovie(title, releaseYear, tmdbApiKey) {
+async function searchTmdbShowOrMovie(title, releaseYear, tmdbApiKey, options = {}) {
   if (!tmdbApiKey || !title) return null;
-  let cleanTitle = String(title).trim();
+  let cleanTitle = cleanNetflixTitleString(title);
 
-  // Strip season/episode suffixes if present in title string (e.g. "Gokusen - Season 1 - Episode 1" -> "Gokusen")
+  // Strip season/episode suffixes if present in title string (multilingual: S1, Season 1, Staffel 1, Episode 3, Flg. 3, Folge 3, 3화, etc.)
   cleanTitle = cleanTitle
-    .replace(/\s*[:\-·]\s*(?:Season|시즌|S\s*\d|Episode|화|회|Ep\s*\d).*$/i, '')
-    .replace(/\s+(?:S\d+E\d+|S\d+|Ep\s*\d+|E\d+|\d+화|\d+회)\b.*$/i, '')
+    .replace(/\s*[:\-·]\s*(?:Season|시즌|S\s*\d|Staffel|Saison|Temporada|Stagione|Episode|Episodio|Épisode|Folge|Puntata|Capítulo|Cap|Flg|Ép|Ep|E|화|회|話|集)\.?\s*\d.*$/i, '')
+    .replace(/\s+(?:S\d+E\d+|S\d+|Ep\s*\d+|E\d+|\d+화|\d+회|Flg\.?\s*\d+|Folge\s*\d+)\b.*$/i, '')
     .trim();
 
   const lower = cleanTitle.toLowerCase().replace(/[^a-z0-9가-힣ㄱ-ㅎㅏ-ㅣ\u3040-\u30ff\u4e00-\u9faf]/gi, '');
@@ -1303,7 +1516,7 @@ async function searchTmdbShowOrMovie(title, releaseYear, tmdbApiKey) {
     return null;
   }
 
-  const bestMatch = matchBestTmdbResult(cleanTitle, results);
+  const bestMatch = matchBestTmdbResult(cleanTitle, results, { releaseYear, directSynopsis: options.directSynopsis });
   console.log('[Munmek TMDB] Best matched TMDB item:', {
     id: bestMatch?.id,
     title: bestMatch?.title || bestMatch?.name,
@@ -1334,17 +1547,27 @@ async function fetchTmdbDetails(tmdbId, mediaType, seasonNumber, episodeNumber, 
       }
     }
 
-    if (isTv && seasonNumber && episodeNumber) {
-      const epUrl = `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}?api_key=${tmdbApiKey}&language=ko-KR`;
+    const effectiveSeason = (seasonNumber != null) ? seasonNumber : (episodeNumber ? 1 : null);
+    if (isTv && effectiveSeason && episodeNumber) {
+      const epUrl = `https://api.themoviedb.org/3/tv/${tmdbId}/season/${effectiveSeason}/episode/${episodeNumber}?api_key=${tmdbApiKey}&language=ko-KR`;
       console.log('[Munmek TMDB] Fetching episode details:', epUrl.replace(tmdbApiKey, '***'));
       let epRes = await fetch(epUrl);
       if (epRes.ok) {
         episodeDetails = await epRes.json();
         if (!episodeDetails.overview) {
-          const enEpRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}?api_key=${tmdbApiKey}&language=en-US`);
+          const deEpRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${effectiveSeason}/episode/${episodeNumber}?api_key=${tmdbApiKey}&language=de-DE`);
+          if (deEpRes.ok) {
+            const deEp = await deEpRes.json();
+            if (deEp.overview) episodeDetails.overview = deEp.overview;
+            if (deEp.name) episodeDetails.name = deEp.name;
+          }
+        }
+        if (!episodeDetails.overview) {
+          const enEpRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${effectiveSeason}/episode/${episodeNumber}?api_key=${tmdbApiKey}&language=en-US`);
           if (enEpRes.ok) {
             const enEp = await enEpRes.json();
             if (enEp.overview) episodeDetails.overview = enEp.overview;
+            if (enEp.name) episodeDetails.name = enEp.name;
           }
         }
       }
@@ -1359,6 +1582,12 @@ async function fetchTmdbDetails(tmdbId, mediaType, seasonNumber, episodeNumber, 
 async function resolveNetflixTmdbContext(netflixData, config) {
   let { title, netflixId, seasonNumber, episodeNumber, releaseYear } = netflixData || {};
   const tmdbApiKey = config.tmdbApiKey || '';
+
+  if (episodeNumber && !seasonNumber) {
+    seasonNumber = 1;
+    if (netflixData) netflixData.seasonNumber = 1;
+    console.log('[Munmek Netflix] TV episode detected without season, defaulted to Season 1');
+  }
 
   console.log('[Munmek Netflix] resolveNetflixTmdbContext starting with:', {
     title,
@@ -1387,6 +1616,11 @@ async function resolveNetflixTmdbContext(netflixData, config) {
           netflixData.hasDirectSynopsis = true;
           console.log(`[Munmek Netflix] Successfully recovered synopsis from netflix.com/title: "${metaParsed.synopsis.slice(0, 60)}..."`);
         }
+        if (!releaseYear && metaParsed.releaseYear) {
+          releaseYear = metaParsed.releaseYear;
+          netflixData.releaseYear = releaseYear;
+          console.log(`[Munmek Netflix] Successfully recovered releaseYear from netflix.com/title: ${releaseYear}`);
+        }
       }
     } catch (fetchErr) {
       console.warn('[Munmek Netflix] Failed to fetch netflix.com/title:', fetchErr);
@@ -1408,13 +1642,23 @@ async function resolveNetflixTmdbContext(netflixData, config) {
       matchInfo = cachedMap[title];
     }
 
+    // Invalidate cached match if releaseYear is known and differs from cached entry by > 2 years
+    if (matchInfo && releaseYear && matchInfo.releaseYear && Math.abs(matchInfo.releaseYear - releaseYear) > 2) {
+      console.log('[Munmek TMDB] Cached match year mismatch, re-searching:', { cachedYear: matchInfo.releaseYear, releaseYear });
+      matchInfo = null;
+    }
+
     if (!matchInfo) {
-      const searchMatch = await searchTmdbShowOrMovie(title, releaseYear, tmdbApiKey);
+      const searchMatch = await searchTmdbShowOrMovie(title, releaseYear, tmdbApiKey, { directSynopsis: netflixData?.synopsis });
       if (searchMatch) {
+        const itemYear = searchMatch.first_air_date
+          ? parseInt(searchMatch.first_air_date.slice(0, 4), 10)
+          : (searchMatch.release_date ? parseInt(searchMatch.release_date.slice(0, 4), 10) : releaseYear);
         matchInfo = {
           tmdbId: searchMatch.id,
           mediaType: searchMatch.media_type || (searchMatch.first_air_date ? 'tv' : 'movie'),
-          title: searchMatch.title || searchMatch.name || title
+          title: searchMatch.title || searchMatch.name || title,
+          releaseYear: itemYear || releaseYear
         };
         if (netflixId && typeof chrome !== 'undefined' && chrome.storage?.local) {
           cachedMap[netflixId] = matchInfo;
@@ -1435,9 +1679,6 @@ async function resolveNetflixTmdbContext(netflixData, config) {
       const parts = [];
       const showTitle = showDetails?.title || showDetails?.name || matchInfo.title || title;
       const showPremise = showDetails?.overview || netflixData?.showSynopsis || netflixData?.synopsis || '';
-      if (showPremise) {
-        parts.push(`Show Premise: ${showPremise}`);
-      }
 
       const epName = episodeDetails?.name || netflixData?.episodeTitle || '';
       const epPlot = episodeDetails?.overview || netflixData?.episodeSynopsis || '';
@@ -1446,6 +1687,10 @@ async function resolveNetflixTmdbContext(netflixData, config) {
         parts.push(`${epHeader}: ${epPlot || 'No episode synopsis available.'}`);
       } else if (epName || epPlot) {
         parts.push(`Episode (${epName || ''}): ${epPlot || ''}`.trim());
+      }
+
+      if (showPremise) {
+        parts.push(`Show Premise: ${showPremise}`);
       }
 
       if (netflixData?.subtitles) {
@@ -1466,21 +1711,24 @@ async function resolveNetflixTmdbContext(netflixData, config) {
   if (netflixData?.hasDirectSynopsis && netflixData?.synopsis) {
     const parts = [];
     const showTitle = title || 'Netflix Video';
-    const epHeader = (seasonNumber && episodeNumber)
-      ? `Episode (S${seasonNumber}E${episodeNumber}): ${netflixData.episodeTitle || ''}`
+    const effectiveSeason = seasonNumber || (episodeNumber ? 1 : null);
+    const epHeader = (effectiveSeason && episodeNumber)
+      ? `Episode (S${effectiveSeason}E${episodeNumber}): ${netflixData.episodeTitle || ''}`
       : (netflixData.episodeTitle ? `Episode: ${netflixData.episodeTitle}` : '');
     if (epHeader) parts.push(epHeader);
-    if (netflixData.showSynopsis && netflixData.episodeSynopsis) {
-      parts.push(`Show Premise: ${netflixData.showSynopsis}`);
+    if (netflixData.episodeSynopsis) {
       parts.push(`Episode Synopsis: ${netflixData.episodeSynopsis}`);
-    } else {
+    }
+    if (netflixData.showSynopsis) {
+      parts.push(`Show Premise: ${netflixData.showSynopsis}`);
+    } else if (!netflixData.episodeSynopsis && netflixData.synopsis) {
       parts.push(`Synopsis: ${netflixData.synopsis}`);
     }
     if (netflixData.subtitles) {
       parts.push(`Recent Dialogue: ${netflixData.subtitles}`);
     }
     const resolved = {
-      title: `${showTitle}${seasonNumber && episodeNumber ? ` S${seasonNumber}E${episodeNumber}` : ''}`,
+      title: `${showTitle}${effectiveSeason && episodeNumber ? ` S${effectiveSeason}E${episodeNumber}` : ''}`,
       rawText: parts.join('\n\n'),
       directSynopsisMatched: true
     };
@@ -1658,10 +1906,7 @@ async function resolveYouTubeContext(ytData) {
 }
 
 function parseNetflixTitleString(rawTitle) {
-  let cleanDoc = String(rawTitle || '')
-    .replace(/\s*[\|\-·]\s*(Netflix|넷플릭스).*$/i, '')
-    .replace(/^(Watch|시청하기)\s+/i, '')
-    .trim();
+  let cleanDoc = cleanNetflixTitleString(rawTitle);
 
   const isGeneric = !cleanDoc ||
     /^netflix$/i.test(cleanDoc) ||
@@ -1678,18 +1923,18 @@ function parseNetflixTitleString(rawTitle) {
   let episodeNumber = null;
   let showTitle = cleanDoc;
 
-  // Match Season and Episode (e.g. "Season 1, Episode 2" or "시즌 1 - 2화" or "S1:E2")
-  const seMatch = cleanDoc.match(/(?:Season|시즌|S)\s*(\d+)[\s,:\-·]*(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+  // Match Season and Episode (multilingual: German, French, Spanish, Portuguese, Italian, Japanese, Korean)
+  const seMatch = cleanDoc.match(/(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S)\s*(\d+)[\s,:\-·]*(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
   if (seMatch) {
     seasonNumber = parseInt(seMatch[1], 10);
     episodeNumber = parseInt(seMatch[2] || seMatch[3], 10);
-    showTitle = cleanDoc.split(/[:\-·]\s*(?:Season|시즌|S\s*\d)/i)[0].trim();
+    showTitle = cleanDoc.split(/[:\-·]\s*(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S\s*\d)/i)[0].trim();
   } else {
-    // Match Episode only (e.g. "Episode 3" or "3화" or "Ep 3")
-    const epOnlyMatch = cleanDoc.match(/(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+    // Match Episode only (e.g. "Episode 3", "Flg. 2", "Folge 2", "3화", "第2話")
+    const epOnlyMatch = cleanDoc.match(/(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
     if (epOnlyMatch) {
       episodeNumber = parseInt(epOnlyMatch[1] || epOnlyMatch[2], 10);
-      showTitle = cleanDoc.split(/[:\-·]\s*(?:Episode|화|회|E\s*\d|Ep\s*\d)/i)[0].trim();
+      showTitle = cleanDoc.split(/[:\-·]\s*(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*\d|(?:第)?\d+\s*(?:화|회|話|集))/i)[0].trim();
     }
   }
 

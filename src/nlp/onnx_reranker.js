@@ -847,6 +847,18 @@
     return false;
   }
 
+  function isGrammarUsageNote(text) {
+    if (!text || typeof text !== 'string') return false;
+    const t = text.trim();
+    if (/^'[^']+'로도\s*(?:쓴다|쓰인다)/i.test(t)) return true;
+    if (/^'(?:에|을|를|으로|로|과|와)?\s*대하여'로도\s*(?:쓴다|쓰인다)/i.test(t)) return true;
+    if (/^'[^']+'의\s*형태로\s*(?:쓴다|쓰인다)/i.test(t)) return true;
+    if (/^Conjugation variant:/i.test(t)) return true;
+    if (/^->\s*/.test(t)) return true;
+    if (/^(?:문형|구문|문법|참고)\s*[:：]/i.test(t)) return true;
+    return false;
+  }
+
   function splitEmbeddedDefinitions(defList, surfaceWord = '') {
     if (!Array.isArray(defList) || defList.length === 0) return [];
 
@@ -883,10 +895,23 @@
         return;
       }
 
+      if (isGrammarUsageNote(cleaned)) {
+        if (currentSense) {
+          currentSense.pattern = currentSense.pattern ? `${currentSense.pattern}; ${cleaned}` : cleaned;
+        }
+        return;
+      }
+
       const numberedMatch = cleaned.match(/^(\d{1,2})[\.\)]\s*(.*)/s);
       if (numberedMatch) {
-        if (currentSense) senses.push(currentSense);
         cleaned = numberedMatch[2].trim();
+        if (isGrammarUsageNote(cleaned)) {
+          if (currentSense) {
+            currentSense.pattern = currentSense.pattern ? `${currentSense.pattern}; ${cleaned}` : cleaned;
+          }
+          return;
+        }
+        if (currentSense) senses.push(currentSense);
         currentSense = { title: cleaned, bodyLines: [], pattern: '' };
         return;
       }

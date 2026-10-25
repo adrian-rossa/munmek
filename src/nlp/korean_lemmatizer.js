@@ -31,17 +31,23 @@
     { text: '로서는', type: 'particle', rule: 'particle-status-topic' },
     { text: '로써는', type: 'particle', rule: 'particle-means-topic' },
 
-    // Standard 2-syllable particles
-    { text: '이라는', type: 'particle', rule: 'particle-quotative-modifier-이라는' },
-    { text: '이라도', type: 'particle', rule: 'particle-even/at-least-이라도' },
+    // Standard 2-syllable & 3-syllable particles (Quotative & Compound)
+    { text: '이라고는', type: 'particle', rule: 'particle-quotative-topic-이라고는', requiresBatchim: true },
+    { text: '라고는', type: 'particle', rule: 'particle-quotative-topic-라고는', requiresBatchim: false },
+    { text: '이라는', type: 'particle', rule: 'particle-quotative-modifier-이라는', requiresBatchim: true },
+    { text: '라는', type: 'particle', rule: 'particle-quotative-modifier-라는', requiresBatchim: false },
+    { text: '이라고도', type: 'particle', rule: 'particle-quotative-also-이라고도', requiresBatchim: true },
+    { text: '라고도', type: 'particle', rule: 'particle-quotative-also-라고도', requiresBatchim: false },
+    { text: '이라고', type: 'particle', rule: 'particle-quotative-이라고', requiresBatchim: true },
+    { text: '라고', type: 'particle', rule: 'particle-quotative-라고', requiresBatchim: false },
+    { text: '이라도', type: 'particle', rule: 'particle-even/at-least-이라도', requiresBatchim: true },
+    { text: '라도', type: 'particle', rule: 'particle-even/at-least-라도', requiresBatchim: false },
     { text: '치고는', type: 'particle', rule: 'particle-considering-topic' },
     { text: '이라는게', type: 'particle', rule: 'particle-quotative-게' },
     { text: '이라는것', type: 'particle', rule: 'particle-quotative-것' },
     { text: '라는게', type: 'particle', rule: 'particle-quotative-게' },
     { text: '라는것', type: 'particle', rule: 'particle-quotative-것' },
-    { text: '라는', type: 'particle', rule: 'particle-quotative-modifier-라는' },
-    { text: '라도', type: 'particle', rule: 'particle-even/at-least-라도' },
-    { text: '이란', type: 'particle', rule: 'particle-quotative-topic-이란' },
+    { text: '이란', type: 'particle', rule: 'particle-quotative-topic-이란', requiresBatchim: true },
     { text: '에는', type: 'particle', rule: 'particle-in/at-topic' },
     { text: '에도', type: 'particle', rule: 'particle-in/at-also' },
     { text: '에의', type: 'particle', rule: 'particle-in/at-possessive' },
@@ -76,7 +82,7 @@
     { text: '치고', type: 'particle', rule: 'particle-considering' },
 
     // Single-syllable particles
-    { text: '란', type: 'particle', rule: 'particle-quotative-topic-란' },
+    { text: '란', type: 'particle', rule: 'particle-quotative-topic-란', requiresBatchim: false },
     { text: '에', type: 'particle', rule: 'locative-dative-particle-e' },
     { text: '께', type: 'particle', rule: 'dative-hon-particle-kke' },
     { text: '게', type: 'particle', rule: 'dative-particle-ge' },
@@ -108,6 +114,11 @@
     { text: '일', replacement: '', rule: 'copula-future-modifier-일' }
   ];
 
+  const ROOT_NOUNS_ENDING_IN_I = new Set([
+    '원숭이', '고양이', '호랑이', '지팡이', '어린이', '젊은이', '올챙이', '곰팡이', '지렁이',
+    '개구쟁이', '깍두기', '도깨비', '손잡이', '목걸이', '귀걸이', '재떨이', '턱받이', '눈두덩이', '털북숭이'
+  ]);
+
   function stripParticles(surface) {
     const results = [];
     if (!surface || surface.length <= 1) return results;
@@ -122,6 +133,18 @@
         }
         if (p.requiresBatchim === false && Jamo.hasBatchim(lastChar)) {
           continue;
+        }
+
+        // Prevent stripping subject particle '이' on known root nouns ending in '이'
+        if (p.text === '이') {
+          let isRoot = false;
+          for (const root of ROOT_NOUNS_ENDING_IN_I) {
+            if (surface.endsWith(root)) {
+              isRoot = true;
+              break;
+            }
+          }
+          if (isRoot) continue;
         }
 
         // Prevent stripping topic particle '는' on verb modifiers like ~하는, ~되는, ~있는, ~없는, ~않는, and intent modifiers ~려는
@@ -535,6 +558,9 @@
 
         const stem = surface.slice(0, -e.suffix.length);
         if (stem.length >= 1) {
+          if (e.suffix === '는' && (stem.endsWith('라고') || stem.endsWith('이라') || stem.endsWith('다는') || stem.endsWith('라는'))) {
+            continue;
+          }
           addCandidate(stem + e.replacement, e.rule, e.confidence);
         }
       }
@@ -784,7 +810,7 @@
     for (const end of endings) {
       if (surface.endsWith(end) && surface.length > end.length) {
         const stem = surface.slice(0, -end.length);
-        if (stem.endsWith('하') || stem.endsWith('되') || stem.endsWith('시키')) continue;
+        if (stem.endsWith('하') || stem.endsWith('되') || stem.endsWith('시키') || stem.endsWith('라고') || stem.endsWith('이라') || stem.endsWith('이란') || stem.endsWith('라는')) continue;
         const lastChar = stem[stem.length - 1];
         if (Jamo.isHangulSyllable(lastChar) && !Jamo.hasBatchim(lastChar)) {
           const rieulStem = stem.slice(0, -1) + Jamo.setBatchim(lastChar, 'ㄹ');

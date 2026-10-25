@@ -55,6 +55,13 @@ Rules:
   const ankiDynamicFieldsContainer = document.getElementById('ankiDynamicFieldsContainer');
   const ankiFieldMappingInput = document.getElementById('ankiFieldMapping');
   const ankiUpdateLastCardInput = document.getElementById('ankiUpdateLastCard');
+  const stage2ProviderSelect = document.getElementById('stage2Provider');
+  const stage2LocalLlmConfig = document.getElementById('stage2LocalLlmConfig');
+  const stage2SystemOneConfig = document.getElementById('stage2SystemOneConfig');
+  const stage2OnnxConfig = document.getElementById('stage2OnnxConfig');
+  const systemOneEndpointUrlInput = document.getElementById('systemOneEndpointUrl');
+  const systemOneApiKeyInput = document.getElementById('systemOneApiKey');
+  const displayCustomEndpoint = document.getElementById('displayCustomEndpoint');
   const enableOnnxRerankerInput = document.getElementById('enableOnnxReranker');
   const dictFileInput = document.getElementById('dictFileInput');
   const importDictBtn = document.getElementById('importDictBtn');
@@ -68,6 +75,9 @@ Rules:
   const enableWebGpuInput = document.getElementById('enableWebGpu');
   const enableDevModeInput = document.getElementById('enableDevMode');
   const devModeSettingsContainer = document.getElementById('devModeSettingsContainer');
+  const subtitleContextLinesSelect = document.getElementById('subtitleContextLines');
+  const autoSelectLlmDefinitionInput = document.getElementById('autoSelectLlmDefinition');
+  const enableE5SenseMatchingOnAiInput = document.getElementById('enableE5SenseMatchingOnAi');
   const tmdbApiKeyInput = document.getElementById('tmdbApiKey');
   const modifierKeyInput = document.getElementById('modifierKey');
   const tooltipFontSizeInput = document.getElementById('tooltipFontSize');
@@ -709,39 +719,7 @@ Rules:
     });
   }
 
-  chrome.storage.local.get([
-    'aiProvider',
-    'apiKey',
-    'modelId',
-    'customEndpointUrl',
-    'customModelId',
-    'customApiKey',
-    'autoTriggerAiOnHover',
-    'customDisableReasoning',
-    'customTemperature',
-    'customTopP',
-    'customTopK',
-    'customMinP',
-    'customRepeatPenalty',
-    'customPresencePenalty',
-    'aiPromptExtension',
-    'tmdbApiKey',
-    'enableDevMode',
-    'enableOnnxReranker',
-    'enableWebGpu',
-    'useFullContext',
-    'enableCheaperSummaryModel',
-    'cheaperSummaryModelId',
-    'selectedDictionaryId',
-    'modifierKey',
-    'tooltipFontSize',
-    'ankiConnectUrl',
-    'ankiDeckName',
-    'ankiNoteType',
-    'ankiFieldMapping',
-    'ankiDefinitionField',
-    'customAiFields'
-  ], (result) => {
+  chrome.storage.local.get(null, (result) => {
     if (Array.isArray(result.customAiFields)) {
       cachedCustomAiFields = result.customAiFields;
       if (customFieldsContainer) {
@@ -769,16 +747,33 @@ Rules:
     if (customPresencePenaltyInput) customPresencePenaltyInput.value = result.customPresencePenalty !== undefined ? result.customPresencePenalty : '0.0';
     if (aiPromptExtensionInput) aiPromptExtensionInput.value = result.aiPromptExtension !== undefined ? result.aiPromptExtension : DEFAULT_AI_PROMPT_EXTENSION;
 
+    function updateStage2ProviderVisibility() {
+      const provider = stage2ProviderSelect ? stage2ProviderSelect.value : 'off';
+      if (stage2LocalLlmConfig) stage2LocalLlmConfig.style.display = provider === 'local_llm' ? 'block' : 'none';
+      if (stage2SystemOneConfig) stage2SystemOneConfig.style.display = provider === 'system_one' ? 'block' : 'none';
+      if (stage2OnnxConfig) stage2OnnxConfig.style.display = provider === 'onnx' ? 'block' : 'none';
+
+      const vectorSection = document.getElementById('vectorPrecomputationSection');
+      if (vectorSection) {
+        const isDev = Boolean(enableDevModeInput && enableDevModeInput.checked);
+        vectorSection.style.display = (isDev && provider === 'onnx') ? 'block' : 'none';
+      }
+
+      if (enableOnnxRerankerInput) {
+        enableOnnxRerankerInput.checked = (provider === 'onnx');
+      }
+
+      if (displayCustomEndpoint && customEndpointUrlInput) {
+        displayCustomEndpoint.textContent = customEndpointUrlInput.value || 'http://localhost:1234/v1';
+      }
+    }
+
     function updateDevModeVisibility() {
       const isDev = Boolean(enableDevModeInput && enableDevModeInput.checked);
       if (devModeSettingsContainer) {
         devModeSettingsContainer.style.display = isDev ? 'block' : 'none';
       }
-      const vectorSection = document.getElementById('vectorPrecomputationSection');
-      if (vectorSection) {
-        const isReranker = isDev && Boolean(enableOnnxRerankerInput && enableOnnxRerankerInput.checked);
-        vectorSection.style.display = isReranker ? 'block' : 'none';
-      }
+      updateStage2ProviderVisibility();
     }
 
     if (enableDevModeInput) {
@@ -791,14 +786,33 @@ Rules:
       });
     }
 
-    enableOnnxRerankerInput.checked = typeof result.enableOnnxReranker === 'boolean' ? result.enableOnnxReranker : false;
-    if (enableOnnxRerankerInput) {
-      enableOnnxRerankerInput.addEventListener('change', () => {
-        chrome.storage.local.set({ enableOnnxReranker: enableOnnxRerankerInput.checked });
-        updateDevModeVisibility();
+    let initialStage2Provider = result.stage2Provider;
+    if (!initialStage2Provider) {
+      initialStage2Provider = result.enableOnnxReranker ? 'onnx' : 'off';
+    }
+    if (stage2ProviderSelect) {
+      stage2ProviderSelect.value = initialStage2Provider;
+      updateStage2ProviderVisibility();
+      stage2ProviderSelect.addEventListener('change', () => {
+        chrome.storage.local.set({
+          stage2Provider: stage2ProviderSelect.value,
+          enableOnnxReranker: (stage2ProviderSelect.value === 'onnx')
+        });
+        updateStage2ProviderVisibility();
         updateDictStatus();
       });
     }
+
+    if (systemOneEndpointUrlInput) systemOneEndpointUrlInput.value = result.systemOneEndpointUrl || 'http://localhost:8090/v1/systemone';
+    if (systemOneApiKeyInput && result.systemOneApiKey) systemOneApiKeyInput.value = result.systemOneApiKey;
+
+    if (customEndpointUrlInput) {
+      customEndpointUrlInput.addEventListener('input', () => {
+        if (displayCustomEndpoint) displayCustomEndpoint.textContent = customEndpointUrlInput.value || 'http://localhost:1234/v1';
+      });
+    }
+
+    enableOnnxRerankerInput.checked = (initialStage2Provider === 'onnx');
     if (enableWebGpuInput) {
       enableWebGpuInput.checked = typeof result.enableWebGpu === 'boolean' ? result.enableWebGpu : false;
       enableWebGpuInput.addEventListener('change', () => {
@@ -810,6 +824,9 @@ Rules:
     if (useFullContextInput) useFullContextInput.checked = Boolean(result.useFullContext);
     if (enableCheaperSummaryModelInput) enableCheaperSummaryModelInput.checked = Boolean(result.enableCheaperSummaryModel);
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = result.cheaperSummaryModelId || 'gemini-flash-lite-latest';
+    if (subtitleContextLinesSelect) subtitleContextLinesSelect.value = String(result.subtitleContextLines || 3);
+    if (autoSelectLlmDefinitionInput) autoSelectLlmDefinitionInput.checked = (typeof result.autoSelectLlmDefinition === 'boolean') ? result.autoSelectLlmDefinition : true;
+    if (enableE5SenseMatchingOnAiInput) enableE5SenseMatchingOnAiInput.checked = Boolean(result.enableE5SenseMatchingOnAi);
     if (selectedDictionaryIdInput && result.selectedDictionaryId) selectedDictionaryIdInput.value = result.selectedDictionaryId;
     if (modifierKeyInput) modifierKeyInput.value = result.modifierKey || 'Shift';
     if (tooltipFontSizeInput) tooltipFontSizeInput.value = result.tooltipFontSize || '15';
@@ -860,15 +877,24 @@ Rules:
     if (customFieldsContainer) customFieldsContainer.innerHTML = '';
     cachedCustomAiFields = [];
     if (enableDevModeInput) enableDevModeInput.checked = false;
+    if (stage2ProviderSelect) stage2ProviderSelect.value = 'off';
     enableOnnxRerankerInput.checked = false;
+    if (systemOneEndpointUrlInput) systemOneEndpointUrlInput.value = 'http://localhost:8090/v1/systemone';
+    if (systemOneApiKeyInput) systemOneApiKeyInput.value = '';
     if (enableWebGpuInput) enableWebGpuInput.checked = false;
     if (devModeSettingsContainer) devModeSettingsContainer.style.display = 'none';
+    if (stage2LocalLlmConfig) stage2LocalLlmConfig.style.display = 'none';
+    if (stage2SystemOneConfig) stage2SystemOneConfig.style.display = 'none';
+    if (stage2OnnxConfig) stage2OnnxConfig.style.display = 'none';
     const vectorSection = document.getElementById('vectorPrecomputationSection');
     if (vectorSection) vectorSection.style.display = 'none';
     updateDictStatus();
     if (useFullContextInput) useFullContextInput.checked = false;
     if (enableCheaperSummaryModelInput) enableCheaperSummaryModelInput.checked = false;
     if (cheaperSummaryModelIdInput) cheaperSummaryModelIdInput.value = 'gemini-flash-lite-latest';
+    if (subtitleContextLinesSelect) subtitleContextLinesSelect.value = '3';
+    if (autoSelectLlmDefinitionInput) autoSelectLlmDefinitionInput.checked = true;
+    if (enableE5SenseMatchingOnAiInput) enableE5SenseMatchingOnAiInput.checked = false;
     if (selectedDictionaryIdInput) selectedDictionaryIdInput.value = 'all';
     if (modifierKeyInput) modifierKeyInput.value = 'Shift';
     if (tooltipFontSizeInput) tooltipFontSizeInput.value = '15';
@@ -904,8 +930,14 @@ Rules:
       aiPromptExtension: DEFAULT_AI_PROMPT_EXTENSION,
       customAiFields: [],
       enableDevMode: false,
+      stage2Provider: 'off',
       enableOnnxReranker: false,
       enableWebGpu: false,
+      enableE5SenseMatchingOnAi: false,
+      autoSelectLlmDefinition: true,
+      subtitleContextLines: 3,
+      systemOneEndpointUrl: 'http://localhost:8090/v1/systemone',
+      systemOneApiKey: '',
       useFullContext: false,
       enableCheaperSummaryModel: false,
       cheaperSummaryModelId: 'gemini-flash-lite-latest',
@@ -951,7 +983,10 @@ Rules:
     const customPresencePenalty = customPresencePenaltyInput ? customPresencePenaltyInput.value.trim() : '0.0';
     const aiPromptExtension = aiPromptExtensionInput ? aiPromptExtensionInput.value.trim() : '';
     const enableDevMode = enableDevModeInput ? enableDevModeInput.checked : false;
-    const enableOnnxReranker = enableOnnxRerankerInput.checked;
+    const stage2Provider = stage2ProviderSelect ? stage2ProviderSelect.value : 'off';
+    const enableOnnxReranker = (stage2Provider === 'onnx');
+    const systemOneEndpointUrl = systemOneEndpointUrlInput ? systemOneEndpointUrlInput.value.trim() : '';
+    const systemOneApiKey = systemOneApiKeyInput ? systemOneApiKeyInput.value.trim() : '';
     const enableWebGpu = enableWebGpuInput ? enableWebGpuInput.checked : false;
     const useFullContext = useFullContextInput ? useFullContextInput.checked : false;
     const enableCheaperSummaryModel = enableCheaperSummaryModelInput ? enableCheaperSummaryModelInput.checked : false;
@@ -964,6 +999,9 @@ Rules:
     const ankiNoteType = ankiNoteTypeSelect.value || 'Basic';
     const ankiDefinitionField = ankiDefinitionFieldSelect.value || 'Back';
     updateFieldMappingJson();
+    const subtitleContextLines = subtitleContextLinesSelect ? parseInt(subtitleContextLinesSelect.value, 10) : 3;
+    const autoSelectLlmDefinition = autoSelectLlmDefinitionInput ? autoSelectLlmDefinitionInput.checked : true;
+    const enableE5SenseMatchingOnAi = enableE5SenseMatchingOnAiInput ? enableE5SenseMatchingOnAiInput.checked : false;
     const customAiFields = syncCustomAiFieldsFromUI();
 
     const dataToSave = {
@@ -985,8 +1023,14 @@ Rules:
       aiPromptExtension,
       customAiFields,
       enableDevMode,
+      stage2Provider,
       enableOnnxReranker,
       enableWebGpu,
+      enableE5SenseMatchingOnAi,
+      autoSelectLlmDefinition,
+      subtitleContextLines,
+      systemOneEndpointUrl,
+      systemOneApiKey,
       useFullContext,
       enableCheaperSummaryModel,
       cheaperSummaryModelId,

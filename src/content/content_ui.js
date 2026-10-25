@@ -133,8 +133,8 @@
         return state.verifiedDictionaryCandidates.has(cText);
       }
 
-      // In unverified fallback mode, only allow substantive nouns of length >= 2
-      return cand.posHint === 'noun' && cText.length >= 2;
+      // In unverified fallback mode, allow substantive nouns of length >= 2
+      return (cand.posHint === 'noun' || cand.posHint === 'noun/stem') && cText.length >= 2;
     }
 
     function resolvePart(cand) {
@@ -151,6 +151,38 @@
       return cand;
     }
 
+    function scoreChain(chain) {
+      if (!Array.isArray(chain) || chain.length === 0) return 0;
+      let score = 0;
+      for (let i = 0; i < chain.length; i++) {
+        const cand = chain[i];
+        const cText = cleanKoreanLemma(cand.text || '');
+        const isVerified = state?.verifiedDictionaryCandidates?.has(cText);
+        const isParticle = cand.posHint === 'particle' || KNOWN_PARTICLES.has(cText);
+        const isGrammar = cand.posHint === 'grammar' || KNOWN_GRAMMAR_ENDINGS.has(cText);
+        const isSubword = cand.reason && /subword/i.test(cand.reason);
+
+        if (isVerified) {
+          score += 10;
+        } else if ((cand.posHint === 'noun' || cand.posHint === 'noun/stem') && cText.length >= 2) {
+          score += isSubword ? 4 : 7;
+        } else if (cand.posHint === 'verb' || cand.posHint === 'adjective' || cand.posHint === 'verb/stem' || cand.posHint === 'adjective/stem') {
+          score += 7;
+        } else if (isParticle) {
+          if (cText.length === 1 && i > 0 && !state?.verifiedDictionaryCandidates?.has(cleanKoreanLemma(chain[i - 1]?.text || ''))) {
+            score += 1;
+          } else {
+            score += 4;
+          }
+        } else if (isGrammar) {
+          score += 4;
+        } else {
+          score += 2;
+        }
+      }
+      return score;
+    }
+
     function searchChain(subTarget, usedIndices, depth) {
       if (!subTarget || depth > 4) return null;
       let bestSub = null;
@@ -164,7 +196,7 @@
 
         if (cText === subTarget) {
           const res = [resolvePart(cand)];
-          if (!bestSub || res.length > bestSub.length) {
+          if (!bestSub || scoreChain(res) > scoreChain(bestSub)) {
             bestSub = res;
           }
         } else if (subTarget.startsWith(cText)) {
@@ -174,7 +206,7 @@
           const subResult = searchChain(rem, nextUsed, depth + 1);
           if (subResult && subResult.length > 0) {
             const res = [resolvePart(cand), ...subResult];
-            if (!bestSub || res.length > bestSub.length) {
+            if (!bestSub || scoreChain(res) > scoreChain(bestSub)) {
               bestSub = res;
             }
           }
@@ -184,6 +216,7 @@
     }
 
     let bestChain = null;
+    let bestChainScore = -1;
     for (let i = 0; i < candidates.length; i++) {
       const cand1 = candidates[i];
       if (!isEligibleConstituent(cand1, true)) continue;
@@ -204,8 +237,10 @@
         const rest = searchChain(rem, used, 1);
         if (rest && rest.length > 0) {
           const chain = [resolvePart(cand1), ...rest];
-          if (!bestChain || chain.length > bestChain.length) {
+          const chainScore = scoreChain(chain);
+          if (!bestChain || chainScore > bestChainScore || (chainScore === bestChainScore && chain.length > bestChain.length)) {
             bestChain = chain;
+            bestChainScore = chainScore;
           }
         }
       }
@@ -588,6 +623,18 @@
     return false;
   }
 
+  function isGrammarUsageNote(text) {
+    if (!text || typeof text !== 'string') return false;
+    const t = text.trim();
+    if (/^'[^']+'로도\s*(?:쓴다|쓰인다)/i.test(t)) return true;
+    if (/^'(?:에|을|를|으로|로|과|와)?\s*대하여'로도\s*(?:쓴다|쓰인다)/i.test(t)) return true;
+    if (/^'[^']+'의\s*형태로\s*(?:쓴다|쓰인다)/i.test(t)) return true;
+    if (/^Conjugation variant:/i.test(t)) return true;
+    if (/^->\s*/.test(t)) return true;
+    if (/^(?:문형|구문|문법|참고)\s*[:：]/i.test(t)) return true;
+    return false;
+  }
+
   function splitEmbeddedDefinitions(defList, surfaceWord = '') {
     if (!Array.isArray(defList) || defList.length === 0) return [];
 
@@ -625,10 +672,23 @@
         return;
       }
 
+      if (isGrammarUsageNote(cleaned)) {
+        if (currentSense) {
+          currentSense.pattern = currentSense.pattern ? `${currentSense.pattern}; ${cleaned}` : cleaned;
+        }
+        return;
+      }
+
       const numberedMatch = cleaned.match(/^(\d{1,2})[\.\)]\s*(.*)/s);
       if (numberedMatch) {
-        if (currentSense) senses.push(currentSense);
         cleaned = numberedMatch[2].trim();
+        if (isGrammarUsageNote(cleaned)) {
+          if (currentSense) {
+            currentSense.pattern = currentSense.pattern ? `${currentSense.pattern}; ${cleaned}` : cleaned;
+          }
+          return;
+        }
+        if (currentSense) senses.push(currentSense);
         const jaHeadwordMatch = cleaned.match(/^(.*?【[^】]+】)\s*(.+)$/);
         if (jaHeadwordMatch) {
           currentSense = { title: jaHeadwordMatch[1].trim(), bodyLines: [jaHeadwordMatch[2].trim()], pattern: '' };
@@ -762,11 +822,12 @@
     const koelectraMatchedDefIdx = Math.min(Math.max(0, rawBestIdx), Math.max(0, definitions.length - 1));
     const defConfScores = isStage2Enabled && Array.isArray(entry._defConfidenceScores) ? entry._defConfidenceScores : [];
 
+    const allowAutoSelectLlm = (state.autoSelectLlmDefinition !== false);
     const selectedIndexKey = `selectedDefIndex_${itemIndex}`;
     let selectedIndex = 0;
     if (state.userSelectedDef && typeof state[selectedIndexKey] === 'number') {
       selectedIndex = state[selectedIndexKey];
-    } else if (hasGeminiMatch) {
+    } else if (hasGeminiMatch && allowAutoSelectLlm) {
       selectedIndex = matchedDefIdx;
     } else if (isStage2Enabled && typeof entry._bestDefIndex === 'number') {
       selectedIndex = koelectraMatchedDefIdx;
@@ -791,12 +852,26 @@
       }
     } else if (hasKoElectraMatch) {
       const isTopMatchedTab = validIndex === koelectraMatchedDefIdx;
-      const themeColors = getConfidenceBadgeColors(activeConfScore, isKoElectraMatched && isTopMatchedTab);
-      const prefix = isKoElectraMatched ? '✨ Context Matched' : '✨ Score';
-      if (isTopMatchedTab) {
-        geminiBadgeHtml = `<span style="background: ${themeColors.bg}; color: ${themeColors.color}; border: 1px solid ${themeColors.border}; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">${prefix} · ${activeConfScore}</span>`;
-      } else {
-        geminiBadgeHtml = `<span style="background: ${themeColors.bg}; color: ${themeColors.color}; border: 1px solid ${themeColors.border}; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">${prefix} (Def ${koelectraMatchedDefIdx + 1} · ${bestConfScore})</span>`;
+      const targetScoreStr = isTopMatchedTab ? activeConfScore : bestConfScore;
+      const scoreNum = parseInt(String(targetScoreStr || '').replace(/\D/g, ''), 10) || 0;
+      const themeColors = getConfidenceBadgeColors(targetScoreStr, isKoElectraMatched && isTopMatchedTab);
+
+      if (isKoElectraMatched && scoreNum >= 60) {
+        // High confidence winning card in Stage 2 neural disambiguation
+        const prefix = '✨ Context Matched';
+        if (isTopMatchedTab) {
+          geminiBadgeHtml = `<span style="background: ${themeColors.bg}; color: ${themeColors.color}; border: 1px solid ${themeColors.border}; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">${prefix} · ${activeConfScore}</span>`;
+        } else {
+          geminiBadgeHtml = `<span style="background: ${themeColors.bg}; color: ${themeColors.color}; border: 1px solid ${themeColors.border}; padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 700; margin-left: 6px; display: inline-block;">${prefix} (Def ${koelectraMatchedDefIdx + 1} · ${bestConfScore})</span>`;
+        }
+      } else if (targetScoreStr) {
+        // Moderate confidence winner or secondary/single-definition card
+        const neutralStyle = 'background: #f3f4f6; color: #4b5563; border: 1px solid #d1d5db;';
+        if (isTopMatchedTab) {
+          geminiBadgeHtml = `<span style="${neutralStyle} padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 600; margin-left: 6px; display: inline-block;">Score · ${activeConfScore}</span>`;
+        } else {
+          geminiBadgeHtml = `<span style="${neutralStyle} padding: 2px 8px; border-radius: 999px; font-size: 0.72em; font-weight: 600; margin-left: 6px; display: inline-block;">Score (Def ${koelectraMatchedDefIdx + 1} · ${bestConfScore})</span>`;
+        }
       }
     }
 
@@ -817,7 +892,9 @@
           ${definitions.map((def, idx) => {
             const isActive = idx === validIndex;
             const isLlmTab = (isCardMatched && matchedDefIdx === idx);
-            const isMatchedTab = isLlmTab || (isKoElectraMatched && koelectraMatchedDefIdx === idx);
+            const tabScoreNum = parseInt(String(defConfScores[idx] || activeConfScore || '').replace(/\D/g, ''), 10) || 0;
+            const isKoElectraTabConfident = isKoElectraMatched && koelectraMatchedDefIdx === idx && tabScoreNum >= 60;
+            const isMatchedTab = hasGeminiMatch ? isLlmTab : isKoElectraTabConfident;
             const shortText = truncateText(stripHtml(def), 18);
             const tabScoreStr = (isStage2Enabled && defConfScores[idx]) ? ` (${defConfScores[idx]})` : '';
 
@@ -1170,7 +1247,13 @@
                </div>`
             : ''}
 
-          ${notes
+          ${targetItem.dialogue_nuance || targetItem.dialogueNuance
+            ? `<div style="font-size: 0.82em; color: #214144; margin-top: 6px; background: #eaf4f2; padding: 6px 10px; border-radius: 8px; border-left: 3px solid #2f5d62; line-height: 1.45;">
+                <strong style="color: #2f5d62;">Context & Tone:</strong> ${escapeHtml(targetItem.dialogue_nuance || targetItem.dialogueNuance)}
+               </div>`
+            : ''}
+
+          ${notes && notes !== (targetItem.dialogue_nuance || targetItem.dialogueNuance)
             ? `<div style="font-size: 0.82em; color: #4f463a; margin-top: 6px; font-style: italic; background: #fff; padding: 6px 10px; border-radius: 8px; border: 1px solid #eadfce;">
                 <strong>Context Note:</strong> ${escapeHtml(notes)}
                </div>`
@@ -1358,16 +1441,41 @@
           const isStub = defText.includes('Conjugation variant:') || defText.includes('->');
           if (isStub) return;
 
-          const tokens = extractTokens(defText);
+          // Separate gloss (first phrase / line before period or newline) from explanation
+          const glossMatch = defText.match(/^([^\.\r\n]+)/);
+          const glossText = glossMatch ? glossMatch[1] : defText;
+          const descText = glossMatch ? defText.substring(glossMatch[1].length) : '';
+
+          const glossTokens = extractTokens(glossText);
+          const descTokens = extractTokens(descText);
+
+          const matchedStems = new Set();
           let tokenScore = 0;
-          tokens.forEach((t) => {
+
+          // Gloss tokens carry primary semantic equivalence weight
+          glossTokens.forEach((t) => {
             if (tokenMatchesGemini(t)) {
-              tokenScore += t.length >= 4 ? 3 : 2;
+              const stem = t.replace(/(?:ing|ed|es|s)$/, '');
+              if (!matchedStems.has(stem)) {
+                matchedStems.add(stem);
+                tokenScore += t.length >= 4 ? 4 : 3;
+              }
             }
           });
 
-          // Stage 2 Neural Multilingual E5 alignment bonus
-          const e5DefBonus = (typeof item._bestDefIndex === 'number' && item._bestDefIndex === defIdx) ? 20 : 0;
+          // Description tokens carry secondary weight
+          descTokens.forEach((t) => {
+            if (tokenMatchesGemini(t)) {
+              const stem = t.replace(/(?:ing|ed|es|s)$/, '');
+              if (!matchedStems.has(stem)) {
+                matchedStems.add(stem);
+                tokenScore += t.length >= 4 ? 2 : 1;
+              }
+            }
+          });
+
+          // Stage 2 Neural Sense Disambiguation alignment bonus
+          const e5DefBonus = (typeof item._bestDefIndex === 'number' && item._bestDefIndex === defIdx) ? 45 : 0;
           const defScore = (tokenScore > 0 ? (tokenScore * 20) : 0) + e5DefBonus;
 
           if (defScore > bestItemDefScore) {
@@ -1533,7 +1641,7 @@
       state.geminiMatchedItemIndex = overallBestItemIdx;
       state.geminiMatchedDefIndex = overallBestDefIdx;
 
-      if (!state.userSelectedDef) {
+      if (!state.userSelectedDef && state.autoSelectLlmDefinition !== false) {
         state[`selectedDefIndex_${overallBestItemIdx}`] = overallBestDefIdx;
         state.selectedDefinitionIndex = overallBestDefIdx;
       }
@@ -1632,6 +1740,7 @@
     getLlmResponseLanguage,
     renderActions,
     renderDictionaryEntriesGrouped,
+    renderSingleEntryCard,
     findCompoundPair,
     findCompoundChain
   };

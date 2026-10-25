@@ -156,11 +156,11 @@
 
         // Subword noun candidates (require length >= 2 for prefix to avoid spurious single Jamo/characters like '지')
         if (prefix.length >= 2) {
-          addCandidate(prefix, `prefix subword (${prefix})`, 75, { posHint: 'noun/stem' });
+          addCandidate(prefix, `prefix subword (${prefix})`, 75, { posHint: 'noun' });
         }
 
         if (suffix.length >= 2 || (rawSurface.length <= 3 && suffix.length >= 1)) {
-          addCandidate(suffix, `suffix subword (${suffix})`, 70, { posHint: 'noun/stem' });
+          addCandidate(suffix, `suffix subword (${suffix})`, 70, { posHint: 'noun' });
           const suffixLemmas = Lemmatizer.deconjugateVerbAdjective(suffix);
           for (const item of suffixLemmas) {
             if (item.lemma !== suffix) {

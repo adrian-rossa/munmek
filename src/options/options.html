@@ -206,6 +206,22 @@ Return JSON with "words_analysis": [{
         <input type="text" id="cheaperSummaryModelId" placeholder="gemini-flash-lite-latest" style="margin-top:4px;">
         <div class="hint" style="margin-bottom:14px;">Optionally specify a faster or cheaper model ID to summarize page context in the background.</div>
 
+        <label for="subtitleContextLines" style="font-weight: 700; margin-top: 10px; display: block;">Subtitle Dialogue Context (Preceding lines)</label>
+        <select id="subtitleContextLines" style="width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; background: #fff; color: var(--ink); margin-top: 4px; margin-bottom: 4px;">
+          <option value="1">1 line (Minimal tokens / fastest for small LLMs)</option>
+          <option value="2">2 lines (Compact)</option>
+          <option value="3" selected>3 lines (Balanced - Recommended)</option>
+          <option value="4">4 lines (Rich dialogue flow)</option>
+          <option value="5">5 lines (Deep conversational context)</option>
+        </select>
+        <div class="hint" style="margin-bottom: 14px;">Number of preceding subtitle cues to include in AI prompts when watching Netflix or YouTube. Subtitles are short, so 3–4 lines provide conversational context without bloating tokens for lightweight models like Gemma 2B.</div>
+
+        <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-top:8px; margin-bottom:6px;">
+          <input type="checkbox" id="autoSelectLlmDefinition" style="width:auto;" checked>
+          Auto-select definition tab from Ask LLM analysis
+        </label>
+        <div class="hint" style="margin-bottom:14px;">When an Ask LLM explanation arrives, automatically highlights and switches to the best-matching dictionary definition tab (marked with ✨ LLM Matched), even if Stage 2 reranking is disabled.</div>
+
         <label for="tmdbApiKey" style="font-weight: 700; margin-top: 10px; display: block;">The Movie Database (TMDB) API Key</label>
         <input type="password" id="tmdbApiKey" placeholder="Enter your free TMDB API key (v3 auth)" style="margin-top:4px; width: 100%;">
         <div class="hint">Used to automatically search and fetch Netflix TV show, movie, and episode synopses when starting a Munmek session on Netflix. (Get a free API key at <a href="https://www.themoviedb.org/settings/api" target="_blank" style="color: #2563eb;">themoviedb.org</a>).</div>
@@ -224,25 +240,50 @@ Return JSON with "words_analysis": [{
         <div class="hint">Unlocks experimental definition sense reranking with Multilingual E5 ONNX, WebGPU acceleration, and dictionary vector precomputation.</div>
 
         <div id="devModeSettingsContainer" style="display: none; border-top: 1px dashed var(--line); padding-top: 14px; margin-top: 12px;">
-          <div class="hint" style="margin-bottom:14px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; padding:12px 14px; border-radius:12px; line-height:1.5;">
-            📦 <strong>Optional Model Notice (<code>multilingual_e5_small_int8.onnx</code>):</strong><br>
-            Stage 2 Cross-Lingual Definition Sense Disambiguation is an optional, experimental feature (~118 MB). To keep the repository lightweight, this model file is not bundled with the source repository.
-            <ul style="margin: 6px 0 6px 18px;">
-              <li><strong>Download from GitHub Releases:</strong> Download <code>multilingual_e5_small_int8.onnx</code> from the latest release assets and place it into <code>lib/models/</code>.</li>
-              <li><strong>Or Export Locally:</strong> Run <code>python scripts/export_multilingual_onnx.py</code> to export the INT8 ONNX model via Hugging Face Optimum.</li>
-            </ul>
-            <em>Note: If the ONNX model is not present, Munmek operates seamlessly using full-power Kiwi WASM morphological analysis and Stage 0/1 heuristics.</em>
+          <label for="stage2Provider" style="font-weight:700; display:block; margin-bottom:6px;">Stage 2 Definition Sense Disambiguator</label>
+          <select id="stage2Provider" style="width:100%; padding:10px 14px; border:1px solid var(--line); border-radius:12px; font-size:15px; background:#fff; color:var(--ink); margin-bottom:12px;">
+            <option value="off">Disabled (Default dictionary order)</option>
+            <option value="local_llm">Local LLM Chat / Logprobs (Option C - Reuses your Ask LLM model)</option>
+            <option value="system_one">System One Decision API (Option A Verdict / Option B thecodacus / Jev)</option>
+            <option value="onnx">Multilingual E5 INT8 ONNX (Local offline ~118MB model)</option>
+          </select>
+          <input type="checkbox" id="enableOnnxReranker" style="display:none;">
+
+          <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-top:10px; margin-bottom:6px;">
+            <input type="checkbox" id="enableE5SenseMatchingOnAi" style="width:auto;">
+            Use Multilingual E5 for Sense Matching on Ask LLM
+          </label>
+          <div class="hint" style="margin-bottom:14px;">When enabled, after receiving an Ask LLM explanation (from Gemini Cloud or local models), uses local Multilingual E5 ONNX embeddings to match the LLM's returned definition against dictionary definitions via vector similarity (0 extra tokens).</div>
+
+          <div id="stage2LocalLlmConfig" style="display:none; margin-bottom:14px; background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; padding:12px 14px; border-radius:12px; line-height:1.5;">
+            ⚡ <strong>Reuses your Local LLM settings:</strong> Sense reranking will query the custom endpoint (<code><span id="displayCustomEndpoint">http://localhost:1234/v1</span></code>) and model ID configured in the <em>AI Explanation Settings</em> section above. No additional downloads or setup needed!
           </div>
 
-          <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
-            <input type="checkbox" id="enableOnnxReranker" style="width:auto;">
-            Enable Stage 2 Definition Reranking & Confidence Scores (EXPERIMENTAL)
-          </label>
-          <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
-            <input type="checkbox" id="enableWebGpu" style="width:auto;">
-            Enable WebGPU Hardware Acceleration for Stage 2 (Experimental)
-          </label>
-          <div class="hint" style="margin-bottom:14px;">Leverages your GPU for Stage 2 neural embeddings when supported, accelerating multi-definition reranking from seconds down to milliseconds. Automatically falls back to CPU WASM if unavailable.</div>
+          <div id="stage2SystemOneConfig" style="display:none; margin-bottom:14px; background:#faf5ff; border:1px solid #e9d5ff; color:#581c87; padding:12px 14px; border-radius:12px; line-height:1.5;">
+            🔮 <strong>System One Decision Protocol:</strong> Compatible with <a href="https://github.com/khimaros/verdict" target="_blank" style="color:#7e22ce; font-weight:700;">Verdict</a> (local proxy), <a href="https://github.com/thecodacus/llama.cpp/tree/parallel-decision" target="_blank" style="color:#7e22ce; font-weight:700;">thecodacus parallel-decision</a>, or TypeSafe Jev (Cloud / OpenRouter).
+            <label for="systemOneEndpointUrl" style="font-weight:700; margin-top:10px; display:block;">System One Endpoint URL</label>
+            <input type="text" id="systemOneEndpointUrl" placeholder="http://localhost:8090/v1/systemone" style="margin-top:4px; width:100%;">
+            <label for="systemOneApiKey" style="font-weight:700; margin-top:10px; display:block;">API Key (Optional / for Cloud Jev / OpenRouter)</label>
+            <input type="password" id="systemOneApiKey" placeholder="Bearer token (leave blank for local Verdict)" style="margin-top:4px; width:100%;">
+          </div>
+
+          <div id="stage2OnnxConfig" style="display:none;">
+            <div class="hint" style="margin-bottom:14px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; padding:12px 14px; border-radius:12px; line-height:1.5;">
+              📦 <strong>Optional Model Notice (<code>multilingual_e5_small_int8.onnx</code>):</strong><br>
+              Stage 2 Cross-Lingual Definition Sense Disambiguation is an optional, experimental feature (~118 MB). To keep the repository lightweight, this model file is not bundled with the source repository.
+              <ul style="margin: 6px 0 6px 18px;">
+                <li><strong>Download from GitHub Releases:</strong> Download <code>multilingual_e5_small_int8.onnx</code> from the latest release assets and place it into <code>lib/models/</code>.</li>
+                <li><strong>Or Export Locally:</strong> Run <code>python scripts/export_multilingual_onnx.py</code> to export the INT8 ONNX model via Hugging Face Optimum.</li>
+              </ul>
+              <em>Note: If the ONNX model is not present, Munmek operates seamlessly using full-power Kiwi WASM morphological analysis and Stage 0/1 heuristics.</em>
+            </div>
+
+            <label style="display:flex; gap:10px; align-items:center; font-weight:700; margin-bottom:10px;">
+              <input type="checkbox" id="enableWebGpu" style="width:auto;">
+              Enable WebGPU Hardware Acceleration for Stage 2 (Experimental)
+            </label>
+            <div class="hint" style="margin-bottom:14px;">Leverages your GPU for Stage 2 neural embeddings when supported, accelerating multi-definition reranking from seconds down to milliseconds. Automatically falls back to CPU WASM if unavailable.</div>
+          </div>
         </div>
       </section>
 

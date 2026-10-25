@@ -31,6 +31,9 @@
   let enableStage2Reranker = true;
   let autoTriggerAiOnHover = false;
   let autoAiDebounceTimer = null;
+  let subtitleContextLines = 3;
+  let autoSelectLlmDefinition = true;
+  let enableE5SenseMatchingOnAi = false;
   const subtitleHistoryBuffer = [];
   let _asbObserver = null;
   let _asbContainerEl = null;
@@ -52,7 +55,7 @@
     // Already observing a live container
     if (_asbContainerEl && document.contains(_asbContainerEl)) return;
 
-    const container = document.querySelector('[class*="asbplayer-subtitles-container"]');
+    const container = document.querySelector('[class*="asbplayer-subtitles-container"], .player-timedtext, [data-uia="player-timedtext"], .ytp-caption-window-container, .ytp-caption-window-bottom, #ytp-caption-window-container');
     if (!container) {
       _asbScanAttempts++;
       if (_asbScanAttempts >= MAX_ASB_SCAN_ATTEMPTS && _asbScanInterval) {
@@ -72,13 +75,16 @@
     _asbObserver = new MutationObserver(() => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        // Record only innermost .asbplayer-subtitle cue text (not parent containers)
-        const cues = container.querySelectorAll('[class*="asbplayer-subtitle"]:not([class*="asbplayer-subtitles-container"])');
+        // Record leaf cues from ASBPlayer, Netflix, or YouTube caption containers
+        const cues = container.querySelectorAll(
+          '[class*="asbplayer-subtitle"]:not([class*="asbplayer-subtitles-container"]), .player-timedtext-text-container, .ytp-caption-segment'
+        );
         cues.forEach((cue) => {
           // Skip containers that have subtitle children — only record leaf cues
-          if (cue.querySelector('[class*="asbplayer-subtitle"]')) return;
+          if (cue.querySelector('[class*="asbplayer-subtitle"], .player-timedtext-text-container, .ytp-caption-segment')) return;
           recordSubtitleLine(cue.textContent);
         });
+        checkAndRecordNetflixPlayerMeta();
       }, 80);
     });
 
@@ -109,22 +115,41 @@
     }
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize', 'enableOnnxReranker', 'autoTriggerAiOnHover'], (res) => {
+      function isStage2Active(provider, legacyEnableOnnx) {
+        if (provider !== undefined) return provider !== 'off';
+        return Boolean(legacyEnableOnnx);
+      }
+
+      chrome.storage.local.get(['modifierKey', 'selectedDictionaryId', 'tooltipFontSize', 'enableOnnxReranker', 'stage2Provider', 'autoTriggerAiOnHover', 'subtitleContextLines', 'autoSelectLlmDefinition', 'enableE5SenseMatchingOnAi'], (res) => {
         if (res.modifierKey !== undefined) currentModifierKey = res.modifierKey;
         if (res.selectedDictionaryId) currentSelectedDictionaryId = res.selectedDictionaryId;
         if (res.tooltipFontSize) currentTooltipFontSize = Number(res.tooltipFontSize) || 15;
-        if (res.enableOnnxReranker !== undefined) enableStage2Reranker = Boolean(res.enableOnnxReranker);
+        enableStage2Reranker = isStage2Active(res.stage2Provider, res.enableOnnxReranker);
         if (res.autoTriggerAiOnHover !== undefined) autoTriggerAiOnHover = Boolean(res.autoTriggerAiOnHover);
+        if (res.subtitleContextLines !== undefined) subtitleContextLines = parseInt(res.subtitleContextLines, 10) || 3;
+        if (res.autoSelectLlmDefinition !== undefined) autoSelectLlmDefinition = Boolean(res.autoSelectLlmDefinition);
+        if (res.enableE5SenseMatchingOnAi !== undefined) enableE5SenseMatchingOnAi = Boolean(res.enableE5SenseMatchingOnAi);
       });
 
       if (chrome.storage.onChanged) {
         chrome.storage.onChanged.addListener((changes, areaName) => {
           if (areaName === 'local') {
-            if (changes.enableOnnxReranker !== undefined) {
-              enableStage2Reranker = Boolean(changes.enableOnnxReranker.newValue);
+            if (changes.stage2Provider !== undefined || changes.enableOnnxReranker !== undefined) {
+              chrome.storage.local.get(['stage2Provider', 'enableOnnxReranker'], (s) => {
+                enableStage2Reranker = isStage2Active(s.stage2Provider, s.enableOnnxReranker);
+              });
             }
             if (changes.autoTriggerAiOnHover !== undefined) {
               autoTriggerAiOnHover = Boolean(changes.autoTriggerAiOnHover.newValue);
+            }
+            if (changes.subtitleContextLines !== undefined) {
+              subtitleContextLines = parseInt(changes.subtitleContextLines.newValue, 10) || 3;
+            }
+            if (changes.autoSelectLlmDefinition !== undefined) {
+              autoSelectLlmDefinition = Boolean(changes.autoSelectLlmDefinition.newValue);
+            }
+            if (changes.enableE5SenseMatchingOnAi !== undefined) {
+              enableE5SenseMatchingOnAi = Boolean(changes.enableE5SenseMatchingOnAi.newValue);
             }
             if (changes.modifierKey) currentModifierKey = changes.modifierKey.newValue || 'Shift';
             if (changes.selectedDictionaryId) currentSelectedDictionaryId = changes.selectedDictionaryId.newValue || 'all';
@@ -325,6 +350,32 @@
     return null;
   }
 
+  function extractCleanBlockText(container, fallbackText) {
+    if (!container) return normalizeText(fallbackText || '');
+    try {
+      if (typeof container.cloneNode === 'function') {
+        const clone = container.cloneNode(true);
+        // Remove style, script, noscript, and wiki citation elements
+        const junk = clone.querySelectorAll('style, script, noscript, sup.reference, .mw-ref, .reference');
+        junk.forEach((el) => {
+          if (typeof el.remove === 'function') el.remove();
+        });
+        let raw = clone.textContent || fallbackText || '';
+        // Strip any remaining inline CSS blocks (e.g. .mw-parser-output ... { ... })
+        raw = raw.replace(/\.mw-parser-output[^{]*\{[^}]*\}/gi, ' ');
+        // Strip Wikipedia / wiki citation brackets like [출처 필요], [1], [2], etc.
+        raw = raw.replace(/\[(?:출처\s*필요|\d+)\]/g, ' ');
+        return normalizeText(raw);
+      }
+    } catch (e) {
+      // Fallback if clone fails
+    }
+    let raw = (container && container.textContent) || fallbackText || '';
+    raw = raw.replace(/\.mw-parser-output[^{]*\{[^}]*\}/gi, ' ');
+    raw = raw.replace(/\[(?:출처\s*필요|\d+)\]/g, ' ');
+    return normalizeText(raw);
+  }
+
   function extractHoverContext(range) {
     if (!range) return null;
     const node = range.startContainer;
@@ -348,22 +399,23 @@
     const KOREAN_CHAR_REGEX = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/u;
     if (!KOREAN_CHAR_REGEX.test(word)) return null;
 
-    // Detect ASBPlayer subtitle context via closest() — simple and reliable
+    // Detect ASBPlayer, Netflix timedtext, or YouTube subtitle context via closest()
     const asbplayerContainer = node.parentElement
-      ? node.parentElement.closest('[class*="asbplayer-subtitles"]')
+      ? node.parentElement.closest('[class*="asbplayer-subtitles"], .player-timedtext, [data-uia="player-timedtext"], .ytp-caption-window-container, .ytp-caption-window-bottom, .ytp-caption-segment')
       : null;
     const isSubtitleContext = Boolean(asbplayerContainer);
 
     // For subtitle context, get text from the innermost subtitle cue element.
     // For normal text, use the immediate parent element's text.
     let paragraphText;
+    let blockContainer = null;
     if (asbplayerContainer) {
-      // Find the innermost .asbplayer-subtitle(s) that contains our text
-      const cueEl = node.parentElement.closest('[class*="asbplayer-subtitle"]:not([class*="asbplayer-subtitles-container"])');
+      // Find the innermost subtitle element that contains our text
+      const cueEl = node.parentElement.closest('[class*="asbplayer-subtitle"]:not([class*="asbplayer-subtitles-container"]), .player-timedtext-text-container, .ytp-caption-segment');
       paragraphText = normalizeText((cueEl || asbplayerContainer).textContent || textContent);
       recordSubtitleLine(paragraphText);
     } else {
-      let blockContainer = node.parentElement;
+      blockContainer = node.parentElement;
       while (blockContainer && blockContainer !== document.body && blockContainer !== document.documentElement) {
         const tagName = blockContainer.tagName ? blockContainer.tagName.toLowerCase() : '';
         if (['p', 'li', 'td', 'th', 'article', 'section', 'div', 'blockquote', 'dd', 'dt'].includes(tagName)) {
@@ -371,34 +423,119 @@
         }
         blockContainer = blockContainer.parentElement;
       }
-      paragraphText = normalizeText((blockContainer || node.parentElement)?.textContent || textContent);
+      paragraphText = extractCleanBlockText(blockContainer || node.parentElement, textContent);
     }
 
-    let sentenceWindow = getSentenceWindow(paragraphText, word);
+    const count = Math.max(1, Math.min(5, subtitleContextLines || 3));
+    let sentenceWindow = getSentenceWindow(paragraphText, word, count);
 
     // For subtitles, override currentSentence to be the full cue line
     if (isSubtitleContext && paragraphText) {
       sentenceWindow.currentSentence = paragraphText;
     }
 
-    // Look up prev sentences from subtitle history buffer (two lines back for richer context)
+    let contextLines = [];
+
+    // Look up prev sentences from subtitle history buffer (adaptive lines back for richer context)
     if (subtitleHistoryBuffer.length > 0 && isSubtitleContext) {
-      const cur = sentenceWindow.currentSentence || paragraphText;
-      const idx = subtitleHistoryBuffer.lastIndexOf(cur);
-      if (idx !== -1) {
-        sentenceWindow.prevSentence = idx > 0 ? subtitleHistoryBuffer[idx - 1] : '';
-        sentenceWindow.prevSentence2 = idx > 1 ? subtitleHistoryBuffer[idx - 2] : '';
+      const cur = (sentenceWindow.currentSentence || paragraphText || '').trim();
+      const normCur = normalizeText(cur);
+      let idx = subtitleHistoryBuffer.lastIndexOf(cur);
+      if (idx === -1 && normCur) {
+        idx = subtitleHistoryBuffer.lastIndexOf(normCur);
       }
+      if (idx === -1 && normCur) {
+        for (let i = subtitleHistoryBuffer.length - 1; i >= 0; i--) {
+          const entry = subtitleHistoryBuffer[i];
+          if (entry === normCur || entry.includes(normCur) || normCur.includes(entry)) {
+            idx = i;
+            break;
+          }
+        }
+      }
+
+      let rawLines = [];
+      if (idx !== -1) {
+        const start = Math.max(0, idx - count);
+        rawLines = subtitleHistoryBuffer.slice(start, idx);
+      } else if (subtitleHistoryBuffer.length > 0) {
+        rawLines = subtitleHistoryBuffer.slice(-count);
+      }
+
+      // Apply 250-character budget to protect small local LLMs (e.g. Gemma 2B)
+      let totalLen = rawLines.reduce((sum, l) => sum + l.length, 0);
+      while (rawLines.length > 1 && totalLen > 250) {
+        totalLen -= rawLines.shift().length;
+      }
+      contextLines = rawLines;
+      sentenceWindow.prevSentence = contextLines[contextLines.length - 1] || '';
+      sentenceWindow.prevSentence2 = contextLines[contextLines.length - 2] || '';
+
+      console.log('[Munmek Subtitle Context Extracted]', {
+        targetSentence: cur,
+        configuredSubtitleContextLines: count,
+        foundInHistoryIndex: idx,
+        historyBufferSize: subtitleHistoryBuffer.length,
+        availablePrecedingCuesInHistory: idx !== -1 ? idx : Math.max(0, subtitleHistoryBuffer.length - 1),
+        extractedLinesCount: contextLines.length,
+        contextLines,
+        totalChars: contextLines.reduce((sum, l) => sum + l.length, 0)
+      });
+    } else {
+      // For web articles: gather preceding sentences up to `count` lines, bounded by 250-character budget
+      let rawLines = Array.isArray(sentenceWindow.prevSentences) ? [...sentenceWindow.prevSentences] : [];
+      if (rawLines.length === 0 && (sentenceWindow.prevSentence || sentenceWindow.prevSentence2)) {
+        rawLines = [sentenceWindow.prevSentence2, sentenceWindow.prevSentence].filter(Boolean);
+      }
+
+      // If current paragraph has fewer preceding sentences than requested, check previous sibling paragraph(s)
+      if (rawLines.length < count && blockContainer && blockContainer.parentElement) {
+        let prevEl = blockContainer.previousElementSibling;
+        while (prevEl && rawLines.length < count) {
+          const prevTag = prevEl.tagName ? prevEl.tagName.toLowerCase() : '';
+          if (['p', 'li', 'dd', 'blockquote'].includes(prevTag)) {
+            const prevText = extractCleanBlockText(prevEl, '');
+            if (prevText) {
+              const prevBlockSentences = prevText.split(/(?<=[.!?。？！])\s+|\n+/).map((part) => part.trim()).filter(Boolean);
+              for (let i = prevBlockSentences.length - 1; i >= 0 && rawLines.length < count; i--) {
+                const cand = prevBlockSentences[i];
+                if (cand) {
+                  rawLines.unshift(cand);
+                }
+              }
+            }
+          }
+          prevEl = prevEl.previousElementSibling;
+        }
+      }
+
+      // Apply 250-character budget to protect small local LLMs (e.g. Gemma 2B)
+      let totalLen = rawLines.reduce((sum, l) => sum + l.length, 0);
+      while (rawLines.length > 1 && totalLen > 250) {
+        totalLen -= rawLines.shift().length;
+      }
+      contextLines = rawLines;
+      sentenceWindow.prevSentence = contextLines[contextLines.length - 1] || '';
+      sentenceWindow.prevSentence2 = contextLines[contextLines.length - 2] || '';
+
+      console.log('[Munmek Webpage Context Extracted]', {
+        targetSentence: sentenceWindow.currentSentence,
+        configuredContextLines: count,
+        extractedLinesCount: contextLines.length,
+        contextLines,
+        totalChars: contextLines.reduce((sum, l) => sum + l.length, 0)
+      });
     }
 
     // Merge with tab-level context (e.g. article text around the word)
     if (window._munmekTabContextText && !isSubtitleContext) {
-      const tabWindow = getSentenceWindow(window._munmekTabContextText, word);
+      const tabWindow = getSentenceWindow(window._munmekTabContextText, word, count);
       if (tabWindow && tabWindow.currentSentence && tabWindow.currentSentence !== word) {
         sentenceWindow = {
           currentSentence: sentenceWindow.currentSentence || tabWindow.currentSentence,
           prevSentence: tabWindow.prevSentence || sentenceWindow.prevSentence,
-          prevSentence2: sentenceWindow.prevSentence2 || ''
+          prevSentence2: sentenceWindow.prevSentence2 || '',
+          prevSentences: tabWindow.prevSentences || sentenceWindow.prevSentences
         };
       }
     }
@@ -408,17 +545,18 @@
       sentence: sentenceWindow.currentSentence,
       prevSentence: sentenceWindow.prevSentence,
       prevSentence2: sentenceWindow.prevSentence2 || '',
+      contextLines,
       paragraphText,
       isAsbplayerSubtitle: isSubtitleContext
     };
   }
 
-  function getSentenceWindow(text, sentenceFragment) {
+  function getSentenceWindow(text, sentenceFragment, maxLines = 4) {
     const normalized = normalizeText(text);
-    if (!normalized) return { currentSentence: sentenceFragment, prevSentence: '', prevSentence2: '' };
+    if (!normalized) return { currentSentence: sentenceFragment, prevSentence: '', prevSentence2: '', prevSentences: [] };
 
     const sentences = normalized.split(/(?<=[.!?。？！])\s+|\n+/).map((part) => part.trim()).filter(Boolean);
-    if (sentences.length === 0) return { currentSentence: normalized, prevSentence: '', prevSentence2: '' };
+    if (sentences.length === 0) return { currentSentence: normalized, prevSentence: '', prevSentence2: '', prevSentences: [] };
 
     const fragment = normalizeText(sentenceFragment);
     let index = sentences.findIndex((candidate) => candidate.includes(fragment) || fragment.includes(candidate));
@@ -427,10 +565,14 @@
       index = sentences.indexOf(containingLine);
     }
 
+    const start = Math.max(0, index - maxLines);
+    const prevSentences = index > 0 ? sentences.slice(start, index) : [];
+
     return {
       currentSentence: sentences[index] || normalized,
-      prevSentence: index > 0 ? sentences[index - 1] : '',
-      prevSentence2: index > 1 ? sentences[index - 2] : ''
+      prevSentence: prevSentences.length > 0 ? prevSentences[prevSentences.length - 1] : '',
+      prevSentence2: prevSentences.length > 1 ? prevSentences[prevSentences.length - 2] : '',
+      prevSentences
     };
   }
 
@@ -454,6 +596,7 @@
       sentenceKey: normalizeText(sentence || word),
       prevSentence: normalizeText(context.prevSentence),
       prevSentence2: normalizeText(context.prevSentence2),
+      contextLines: Array.isArray(context.contextLines) ? context.contextLines : [],
       isAsbplayerSubtitle: Boolean(context.isAsbplayerSubtitle),
       dictionaryEntry: null,
       dictionaryMatch: '',
@@ -464,6 +607,7 @@
       tooltipFontSize: currentTooltipFontSize,
       quickFallback: null,
       userSelectedDef: false,
+      autoSelectLlmDefinition,
       isStage2Enabled: enableStage2Reranker,
       isStage2Loading: false,
       feedback: '',
@@ -650,8 +794,16 @@
                   if (typeof cachedRes.koelectraMatchedItemIndex === 'number') {
                     currentHoverState.koelectraMatchedItemIndex = cachedRes.koelectraMatchedItemIndex;
                     currentHoverState.koelectraMatchedDefIndex = cachedRes.koelectraMatchedDefIndex;
-                    currentHoverState[`selectedDefIndex_${cachedRes.koelectraMatchedItemIndex}`] = cachedRes.koelectraMatchedDefIndex;
-                    currentHoverState.selectedDefinitionIndex = cachedRes.koelectraMatchedDefIndex;
+                  }
+                  if (!currentHoverState.userSelectedDef && Array.isArray(cachedRes.entries)) {
+                    cachedRes.entries.forEach((entry, idx) => {
+                      if (entry && typeof entry._bestDefIndex === 'number') {
+                        currentHoverState[`selectedDefIndex_${idx}`] = entry._bestDefIndex;
+                      }
+                    });
+                    if (cachedRes.entries[0] && typeof cachedRes.entries[0]._bestDefIndex === 'number') {
+                      currentHoverState.selectedDefinitionIndex = cachedRes.entries[0]._bestDefIndex;
+                    }
                   }
                   rerenderCurrentTooltip();
                 } else {
@@ -692,7 +844,7 @@
 
   let rerankDebounceTimer = null;
 
-  function triggerDictionaryEntryReranking(state, entries, candidateWord) {
+  function triggerDictionaryEntryReranking(state, entries, candidateWord, forceE5 = false) {
     if (!state || !entries || entries.length === 0 || !state.sentence) {
       if (currentHoverState) {
         currentHoverState.isStage2Loading = false;
@@ -706,7 +858,7 @@
       const defs = Array.isArray(e?.definitions) ? e.definitions : [];
       totalDefs += defs.length || 1;
     }
-    if (totalDefs <= 1) {
+    if (totalDefs <= 0) {
       if (currentHoverState) {
         currentHoverState.isStage2Loading = false;
         rerenderCurrentTooltip();
@@ -714,17 +866,19 @@
       return;
     }
 
-    const hasCachedAnalysis = Boolean(
-      (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
-        ? window.MunmekUI.getGeminiAnalysisForState(state, sentenceAnalysisCache)
-        : null
-    );
-    if (state.geminiMatchedItemIndex !== null || hasCachedAnalysis) {
-      if (currentHoverState) {
-        currentHoverState.isStage2Loading = false;
-        rerenderCurrentTooltip();
+    if (!forceE5) {
+      const hasCachedAnalysis = Boolean(
+        (window.MunmekUI && typeof window.MunmekUI.getGeminiAnalysisForState === 'function')
+          ? window.MunmekUI.getGeminiAnalysisForState(state, sentenceAnalysisCache)
+          : null
+      );
+      if (state.geminiMatchedItemIndex !== null || hasCachedAnalysis) {
+        if (currentHoverState) {
+          currentHoverState.isStage2Loading = false;
+          rerenderCurrentTooltip();
+        }
+        return;
       }
-      return;
     }
 
     if (rerankDebounceTimer) {
@@ -742,14 +896,20 @@
         const tSent = Date.now();
         const tPerfStart = performance.now();
 
+        const reqPayload = {
+          type: 'rerankDictionaryEntries',
+          entries: entries,
+          sentenceContext: state.sentence,
+          word: candidateWord || state.word,
+          surfaceWord: state.originalHoverWord || state.word,
+          t_sent: tSent
+        };
+        if (forceE5) {
+          reqPayload.provider = 'onnx';
+        }
+
         chrome.runtime.sendMessage(
-          {
-            type: 'rerankDictionaryEntries',
-            entries: entries,
-            sentenceContext: state.sentence,
-            word: candidateWord || state.word,
-            t_sent: tSent
-          },
+          reqPayload,
           (response) => {
             const tPerfEnd = performance.now();
             const totalRoundtripMs = (tPerfEnd - tPerfStart).toFixed(2);
@@ -769,10 +929,20 @@
                 if (topEntry && typeof topEntry._bestDefIndex === 'number') {
                   currentHoverState.koelectraMatchedItemIndex = 0;
                   currentHoverState.koelectraMatchedDefIndex = topEntry._bestDefIndex;
-                  if (!currentHoverState.userSelectedDef) {
-                    currentHoverState[`selectedDefIndex_0`] = topEntry._bestDefIndex;
+                }
+                if (!currentHoverState.userSelectedDef) {
+                  rerankedEntries.forEach((entry, idx) => {
+                    if (entry && typeof entry._bestDefIndex === 'number') {
+                      currentHoverState[`selectedDefIndex_${idx}`] = entry._bestDefIndex;
+                    }
+                  });
+                  if (topEntry && typeof topEntry._bestDefIndex === 'number') {
                     currentHoverState.selectedDefinitionIndex = topEntry._bestDefIndex;
                   }
+                }
+
+                if (forceE5 && currentHoverState.currentAnalysis && window.MunmekUI && typeof window.MunmekUI.autoSelectBestDefinitionFromGemini === 'function') {
+                  window.MunmekUI.autoSelectBestDefinitionFromGemini(currentHoverState, currentHoverState.currentAnalysis);
                 }
 
                 const cacheKey = `${candidateWord || state.word}__${state.sentenceKey}`;
@@ -790,7 +960,7 @@
         currentHoverState.isStage2Loading = false;
         rerenderCurrentTooltip();
       }
-    }, 80);
+    }, forceE5 ? 10 : 120);
   }
 
   function triggerProgressiveReranking(state) {
@@ -1114,7 +1284,8 @@
             word: targetWord,
             sentence: state.sentence,
             prevSentence: state.prevSentence,
-            prevSentence2: state.prevSentence2
+            prevSentence2: state.prevSentence2,
+            contextLines: state.contextLines || []
           }
         },
         (res) => {
@@ -1137,6 +1308,7 @@
             if (currentHoverState && currentHoverState.word === state.word) {
               currentHoverState.quickFallback = res.data;
               currentHoverState.lookupReason = `Quick LLM Lookup (${res.data.pos || 'LLM'})`;
+              autoSelectBestDefinitionFromGemini(currentHoverState, res.data);
               rerenderCurrentTooltip();
             }
           }
@@ -1158,19 +1330,24 @@
 
     const wordKey = normalizeText(state.word || '');
     const matchKey = normalizeText(state.dictionaryMatch || '');
+    const contextFingerprint = (Array.isArray(state.contextLines) && state.contextLines.length > 0)
+      ? state.contextLines.join('__').slice(-40).replace(/\s+/g, '')
+      : '';
     const cacheLangKey = wordKey
-      ? `${wordKey}__${state.sentenceKey}__${resolvedLang}`
-      : `${state.sentenceKey}__${resolvedLang}`;
+      ? `${wordKey}__${state.sentenceKey}__${contextFingerprint}__${resolvedLang}`
+      : `${state.sentenceKey}__${contextFingerprint}__${resolvedLang}`;
 
     if (forceRefresh && state.sentenceKey) {
       if (wordKey) {
         sentenceAnalysisCache.delete(`${wordKey}__${state.sentenceKey}__${resolvedLang}`);
+        sentenceAnalysisCache.delete(cacheLangKey);
         if (resolvedLang === 'English') {
           sentenceAnalysisCache.delete(`${wordKey}__${state.sentenceKey}`);
         }
       }
       if (matchKey && matchKey !== wordKey) {
         sentenceAnalysisCache.delete(`${matchKey}__${state.sentenceKey}__${resolvedLang}`);
+        sentenceAnalysisCache.delete(`${matchKey}__${state.sentenceKey}__${contextFingerprint}__${resolvedLang}`);
         if (resolvedLang === 'English') {
           sentenceAnalysisCache.delete(`${matchKey}__${state.sentenceKey}`);
         }
@@ -1181,6 +1358,8 @@
     let cachedLang = resolvedLang;
     if (!forceRefresh && wordKey && sentenceAnalysisCache.has(cacheLangKey) && !pendingAnalysisRequests.has(cacheLangKey)) {
       cached = sentenceAnalysisCache.get(cacheLangKey);
+    } else if (!forceRefresh && wordKey && sentenceAnalysisCache.has(`${wordKey}__${state.sentenceKey}__${resolvedLang}`) && !pendingAnalysisRequests.has(`${wordKey}__${state.sentenceKey}__${resolvedLang}`)) {
+      cached = sentenceAnalysisCache.get(`${wordKey}__${state.sentenceKey}__${resolvedLang}`);
     } else if (!forceRefresh && matchKey && sentenceAnalysisCache.has(`${matchKey}__${state.sentenceKey}__${resolvedLang}`) && !pendingAnalysisRequests.has(`${matchKey}__${state.sentenceKey}__${resolvedLang}`)) {
       cached = sentenceAnalysisCache.get(`${matchKey}__${state.sentenceKey}__${resolvedLang}`);
     } else if (!forceRefresh && resolvedLang === 'English' && wordKey && sentenceAnalysisCache.has(`${wordKey}__${state.sentenceKey}`) && !pendingAnalysisRequests.has(`${wordKey}__${state.sentenceKey}`)) {
@@ -1211,15 +1390,21 @@
     pendingAnalysisRequests.set(cacheLangKey, true);
 
     const targetWordForAi = state.originalHoverWord || state.word;
+    const isSub = Boolean(state.isAsbplayerSubtitle);
+    const logLabel = isSub ? '[Munmek SubtitleContextSent]' : '[Munmek WebpageContextSent]';
 
-    console.log('[Munmek SubtitleContextSent]', {
+    console.log(logLabel, {
       word: targetWordForAi,
       candidate: state.dictionaryMatch,
       originalHoverWord: state.originalHoverWord,
       sentence: state.sentence,
+      configuredContextLines: subtitleContextLines,
+      extractedContextLinesCount: Array.isArray(state.contextLines) ? state.contextLines.length : 0,
+      contextLines: state.contextLines || [],
+      contextLinesTotalChars: (state.contextLines || []).reduce((sum, l) => sum + l.length, 0),
       prevSentence: state.prevSentence || '(none)',
       prevSentence2: state.prevSentence2 || '(none)',
-      isAsbplayerSubtitle: Boolean(state.isAsbplayerSubtitle),
+      isAsbplayerSubtitle: isSub,
       responseLanguage: resolvedLang
     });
 
@@ -1235,6 +1420,7 @@
           sentence: state.sentence,
           prevSentence: state.prevSentence,
           prevSentence2: state.prevSentence2,
+          contextLines: state.contextLines || [],
           dictionaryEntry: state.dictionaryEntry,
           candidate: state.dictionaryMatch,
           responseLanguage: resolvedLang
@@ -1319,6 +1505,12 @@
         rerankDebounceTimer = null;
       }
 
+      // If user enabled E5 sense matching on AI in settings, trigger local E5 ONNX reranking to align definitions
+      if (enableE5SenseMatchingOnAi && !state._hasTriggeredE5ForAi && Array.isArray(state.dictionaryEntries) && state.dictionaryEntries.length > 0) {
+        state._hasTriggeredE5ForAi = true;
+        triggerDictionaryEntryReranking(state, state.dictionaryEntries, state.dictionaryMatch, true);
+      }
+
       if (state.geminiMatchedBase || state.geminiMatchedSurface) {
         const cleanHelper = (window.MunmekUI && window.MunmekUI.cleanKoreanLemma) ||
                             (window.MunmekUI && window.MunmekUI.cleanKoreanWord) ||
@@ -1329,7 +1521,7 @@
 
         let matchingCand = null;
 
-        // 1. Check for candidate matching LLM target base (e.g. 떠나다)
+        // 1. Prioritize LLM target base citation lemma (e.g. 주다 from 줘서, 어떠하다 from 어떠냐)
         if (cleanTarget) {
           matchingCand = (state.candidateList || []).find(c => {
             const cText = c.text || '';
@@ -1337,21 +1529,25 @@
             return cText === cleanTarget || cStem === cleanTarget ||
                    cleanHelper(cText) === cleanTarget || cleanHelper(cStem) === cleanTarget;
           });
-        }
 
-        // 2. Check for candidate matching LLM target surface (e.g. 말이야)
-        if (!matchingCand && cleanSurfaceTarget) {
+          // If citation base is missing from candidate list, inject it as top priority candidate
+          if (!matchingCand) {
+            matchingCand = {
+              text: cleanTarget,
+              score: 98,
+              posHint: (analysisData && analysisData.pos) || 'verb/noun',
+              reason: 'LLM Matched Base',
+              isLlmInjected: true
+            };
+            if (!Array.isArray(state.candidateList)) state.candidateList = [];
+            state.candidateList.unshift(matchingCand);
+          }
+        } else if (cleanSurfaceTarget) {
+          // 2. Fallback to candidate matching LLM target surface (e.g. 말이야)
           matchingCand = (state.candidateList || []).find(c => {
             const cText = c.text || '';
             return cText === cleanSurfaceTarget || cleanHelper(cText) === cleanSurfaceTarget;
           });
-        }
-
-        // 3. If missing from candidate list, inject LLM base form as candidate (preserving 떠나다 injection)
-        if (!matchingCand && cleanTarget) {
-          matchingCand = { text: cleanTarget, score: 96, posHint: 'verb/noun', reason: 'LLM Matched Base', isLlmInjected: true };
-          if (!Array.isArray(state.candidateList)) state.candidateList = [];
-          state.candidateList.unshift(matchingCand);
         }
 
         if (matchingCand) {
@@ -1401,6 +1597,9 @@
           if (cachedAnalysis && window.MunmekUI) {
             window.MunmekUI.autoSelectBestDefinitionFromGemini(state, cachedAnalysis);
           }
+          if (enableStage2Reranker && sortedHits.length > 0) {
+            triggerDictionaryEntryReranking(state, sortedHits, selectedCandidate);
+          }
           rerenderCurrentTooltip();
         } else if (state) {
           chrome.runtime.sendMessage({
@@ -1421,6 +1620,9 @@
                 : null;
               if (cachedAnalysis && window.MunmekUI) {
                 window.MunmekUI.autoSelectBestDefinitionFromGemini(state, cachedAnalysis);
+              }
+              if (enableStage2Reranker && sortedHits.length > 0) {
+                triggerDictionaryEntryReranking(state, sortedHits, selectedCandidate);
               }
               rerenderCurrentTooltip();
             } else if (state) {
@@ -1510,6 +1712,7 @@
 
   let lastKnownNetflixMeta = {
     title: '',
+    releaseYear: null,
     seasonNumber: null,
     episodeNumber: null,
     episodeTitle: '',
@@ -1519,10 +1722,44 @@
     netflixId: ''
   };
 
+  function checkAndRecordNetflixPlayerMeta() {
+    try {
+      if (typeof window !== 'undefined' && window.location && !window.location.hostname.includes('netflix.com')) return;
+      const vTitle = document.querySelector('[data-uia="video-title"], .video-title, [data-uia="control-header"]');
+      if (vTitle) {
+        const hEl = vTitle.querySelector('h4, [data-uia="player-title-header"], .video-title-header, .ellipsize-text');
+        const spanEl = vTitle.querySelector('span, [data-uia="player-title-subtitle"], .video-title-sub');
+        const domShow = (hEl?.textContent || '').trim();
+        const domEp = (spanEl?.textContent || '').trim();
+        if (domShow && !/^netflix$|^netflix video$/i.test(domShow)) {
+          lastKnownNetflixMeta.title = domShow;
+        }
+        if (domEp) {
+          lastKnownNetflixMeta.episodeTitle = domEp;
+          const se = domEp.match(/(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S)\s*(\d+)[\s,:\-·]*(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
+          if (se) {
+            lastKnownNetflixMeta.seasonNumber = parseInt(se[1], 10);
+            lastKnownNetflixMeta.episodeNumber = parseInt(se[2] || se[3], 10);
+          } else {
+            const ep = domEp.match(/(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
+            if (ep) {
+              lastKnownNetflixMeta.episodeNumber = parseInt(ep[1] || ep[2], 10);
+              if (!lastKnownNetflixMeta.seasonNumber) lastKnownNetflixMeta.seasonNumber = 1;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   function parseNetflixTitleString(rawTitle) {
     let cleanDoc = String(rawTitle || '')
-      .replace(/\s*[\|\-·]\s*(Netflix|넷플릭스).*$/i, '')
-      .replace(/^(Watch|시청하기)\s+/i, '')
+      .replace(/[„“”"']/g, '')
+      .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
+      .replace(/\s*[\|\-·]\s*(?:Netflix|넷플릭스).*$/i, '')
+      .replace(/^(?:Watch|시청하기|Ansehen|Anschauen)\s+/i, '')
+      .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
+      .replace(/\s*[\|\-·:]+\s*$/g, '')
       .trim();
 
     const isGeneric = !cleanDoc ||
@@ -1540,16 +1777,16 @@
     let episodeNumber = null;
     let showTitle = cleanDoc;
 
-    const seMatch = cleanDoc.match(/(?:Season|시즌|S)\s*(\d+)[\s,:\-·]*(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+    const seMatch = cleanDoc.match(/(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S)\s*(\d+)[\s,:\-·]*(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
     if (seMatch) {
       seasonNumber = parseInt(seMatch[1], 10);
       episodeNumber = parseInt(seMatch[2] || seMatch[3], 10);
-      showTitle = cleanDoc.split(/[:\-·]\s*(?:Season|시즌|S\s*\d)/i)[0].trim();
+      showTitle = cleanDoc.split(/[:\-·]\s*(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S\s*\d)/i)[0].trim();
     } else {
-      const epOnlyMatch = cleanDoc.match(/(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+      const epOnlyMatch = cleanDoc.match(/(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
       if (epOnlyMatch) {
         episodeNumber = parseInt(epOnlyMatch[1] || epOnlyMatch[2], 10);
-        showTitle = cleanDoc.split(/[:\-·]\s*(?:Episode|화|회|E\s*\d|Ep\s*\d)/i)[0].trim();
+        showTitle = cleanDoc.split(/[:\-·]\s*(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*\d|(?:第)?\d+\s*(?:화|회|話|集))/i)[0].trim();
       }
     }
 
@@ -1558,6 +1795,18 @@
 
   function extractNetflixPageData() {
     try {
+      checkAndRecordNetflixPlayerMeta();
+      // If player controls are idle/unmounted, wake up player overlay to mount video title
+      if (!document.querySelector('[data-uia="video-title"], .video-title, [data-uia="control-header"]')) {
+        const playerArea = document.querySelector('[data-uia="watch-video"], .watch-video, .nf-player-container, video');
+        if (playerArea && typeof playerArea.dispatchEvent === 'function') {
+          try {
+            playerArea.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }));
+          } catch (_) {}
+        }
+        checkAndRecordNetflixPlayerMeta();
+      }
+
       const url = window.location.href;
       const matchWatch = url.match(/\/watch\/(\d+)/);
       const matchTitle = url.match(/\/title\/(\d+)/);
@@ -1566,6 +1815,7 @@
 
       let title = '';
       let epText = '';
+      let releaseYear = null;
       let seasonNumber = null;
       let episodeNumber = null;
 
@@ -1583,7 +1833,7 @@
         }
         if (mAlbum && !/^netflix$|^netflix video$/i.test(mAlbum)) {
           epText = mAlbum;
-          const sMatch = mAlbum.match(/(?:Season|시즌|S)\s*(\d+)/i);
+          const sMatch = mAlbum.match(/(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S)\s*(\d+)/i);
           if (sMatch) seasonNumber = parseInt(sMatch[1], 10);
         }
         if (mTitle && !/^netflix$|^netflix video$/i.test(mTitle)) {
@@ -1592,7 +1842,7 @@
           } else {
             epText = epText ? `${epText} - ${mTitle}` : mTitle;
           }
-          const epMatch = mTitle.match(/(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회)/i);
+          const epMatch = mTitle.match(/(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
           if (epMatch) episodeNumber = parseInt(epMatch[1] || epMatch[2], 10);
         }
       }
@@ -1644,21 +1894,61 @@
 
       // Parse seasonNumber and episodeNumber from epText if not yet populated
       if (epText) {
-        const seMatch = epText.match(/(?:S|Season|시즌)\s*(\d+)[\s:]*(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+        const seMatch = epText.match(/(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S)\s*(\d+)[\s,:\-·]*(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
         if (seMatch) {
           if (!seasonNumber) seasonNumber = parseInt(seMatch[1], 10);
           if (!episodeNumber) episodeNumber = parseInt(seMatch[2] || seMatch[3], 10);
         } else {
-          const epOnly = epText.match(/(?:(?:Episode|E|Ep)\s*(\d+)|(\d+)\s*(?:화|회))/i);
+          const epOnly = epText.match(/(?:(?:Episode|Episodio|Episódio|Épisode|Folge|Puntata|Capítulo|Capitulo|Cap|Flg|Ép|Ep|E)\.?\s*(\d+)|(?:第)?(\d+)\s*(?:화|회|話|集))/i);
           if (epOnly && !episodeNumber) {
             episodeNumber = parseInt(epOnly[1] || epOnly[2], 10);
           }
         }
       }
 
-      // 4. Scrape direct episode and show synopsis from Netflix DOM or JSON-LD
+      // Check season selector elements if seasonNumber is still missing
+      if (!seasonNumber) {
+        const seasonBtn = document.querySelector('[data-uia="selector-season"], [data-uia="control-episodes"], button[aria-label*="Staffel"], button[aria-label*="Season"], button[aria-label*="시즌"]');
+        const sText = (seasonBtn?.textContent || seasonBtn?.getAttribute('aria-label') || '').trim();
+        const sMatch = sText.match(/(?:Season|시즌|シーズン|Staffel|Saison|Temporada|Stagione|S)\s*(\d+)/i);
+        if (sMatch) seasonNumber = parseInt(sMatch[1], 10);
+      }
+
+      // Default season to 1 if episodeNumber is present but seasonNumber is omitted (common in German/multilingual Netflix UI)
+      if (episodeNumber && !seasonNumber) {
+        seasonNumber = 1;
+      }
+
+      // 4. Scrape direct episode and show synopsis and release year from Netflix DOM or JSON-LD
       let episodeSynopsis = '';
       let showSynopsis = '';
+
+      // Check year selectors in DOM
+      const yearSelectors = [
+        '[data-uia="item-year"]',
+        '[data-uia="metadata-year"]',
+        '[data-uia="video-metadata-year"]',
+        '[data-uia="title-info-metadata"] span',
+        '.year',
+        '.item-year',
+        '.previewModal--detailsMetadata-left .year',
+        '.previewModal--detailsMetadata-left span',
+        '.videoMetadata--second-line span',
+        '.title-metadata-item'
+      ];
+      for (const sel of yearSelectors) {
+        const els = document.querySelectorAll(sel);
+        for (const el of els) {
+          const t = (el.textContent || '').trim();
+          const yMatch = t.match(/\b(19\d\d|20\d\d)\b/);
+          if (yMatch) {
+            releaseYear = parseInt(yMatch[1], 10);
+            console.log('[Munmek Netflix] Found releaseYear from DOM selector:', sel, releaseYear);
+            break;
+          }
+        }
+        if (releaseYear) break;
+      }
 
       // Check player overlay / paused player synopsis elements specifically for episode summary
       const epSynopsisEl = document.querySelector('[data-uia="episode-synopsis"], .episode-synopsis, [data-uia="video-synopsis"], [data-uia="control-header-synopsis"], .evidence-overlay, .watch-video--evidence-overlay-text, .previewModal--synopsis, .titleDescription--synopsis');
@@ -1673,7 +1963,14 @@
           if (parsed.description) {
             showSynopsis = parsed.description.trim();
             if (!title && parsed.name) title = parsed.name.trim();
-            break;
+          }
+          if (!releaseYear) {
+            const rawDate = parsed.startDate || parsed.dateCreated || parsed.releasedEvent?.startDate;
+            const yMatch = String(rawDate || '').match(/\b(19\d\d|20\d\d)\b/);
+            if (yMatch) {
+              releaseYear = parseInt(yMatch[1], 10);
+              console.log('[Munmek Netflix] Found releaseYear from JSON-LD:', releaseYear);
+            }
           }
         } catch (e) {}
       }
@@ -1682,6 +1979,7 @@
 
       // Fall back to persistent cache if current state is missing values
       if (!title && lastKnownNetflixMeta.title) title = lastKnownNetflixMeta.title;
+      if (!releaseYear && lastKnownNetflixMeta.releaseYear) releaseYear = lastKnownNetflixMeta.releaseYear;
       if (!seasonNumber && lastKnownNetflixMeta.seasonNumber) seasonNumber = lastKnownNetflixMeta.seasonNumber;
       if (!episodeNumber && lastKnownNetflixMeta.episodeNumber) episodeNumber = lastKnownNetflixMeta.episodeNumber;
       if (!epText && lastKnownNetflixMeta.episodeTitle) epText = lastKnownNetflixMeta.episodeTitle;
@@ -1691,6 +1989,7 @@
 
       // Update persistent cache with any newly discovered values
       if (title) lastKnownNetflixMeta.title = title;
+      if (releaseYear) lastKnownNetflixMeta.releaseYear = releaseYear;
       if (seasonNumber) lastKnownNetflixMeta.seasonNumber = seasonNumber;
       if (episodeNumber) lastKnownNetflixMeta.episodeNumber = episodeNumber;
       if (epText) lastKnownNetflixMeta.episodeTitle = epText;
@@ -1706,6 +2005,7 @@
         netflixData: {
           title: title || '',
           netflixId,
+          releaseYear,
           seasonNumber,
           episodeNumber,
           episodeTitle: epText,
@@ -1723,6 +2023,7 @@
         url,
         netflixId,
         title: result.title,
+        releaseYear,
         seasonNumber,
         episodeNumber,
         hasDirectSynopsis: result.netflixData.hasDirectSynopsis,
@@ -1872,6 +2173,13 @@
         return true;
       }
     });
+  }
+
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__MunmekContentInternal = {
+      extractCleanBlockText,
+      getSentenceWindow
+    };
   }
 
   if (document.body) {
