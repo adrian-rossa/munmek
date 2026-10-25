@@ -2,11 +2,11 @@
 
 # <img width="80" height="80" alt="image" src="https://github.com/user-attachments/assets/e4bfd4a4-19a8-4b35-aa0d-8b5560a178b6"/> Munmek (문맥) — Korean Context Lookup
 
-**Munmek** is a Chromium browser extension for fast, context-aware Korean word lookups. It solves the language ambiguity and complex conjugations that make Korean difficult for learners. By combining a local offline termbank engine (supporting Yomitan / KRDICT imports), the native C++ **Kiwi** WebAssembly morphological analyzer, neural KoELECTRA candidate reranking, and an optional Multilingual E5 cross-lingual sense disambiguation model, Munmek provides instant, accurate dictionary headwords and definitions. It also features automated video subtitle extraction (Netflix, YouTube, ASBPlayer), adaptive multilingual LLM explanations, and 1-click AnkiConnect flashcard exports.
+**Munmek** is a Chromium browser extension for context-aware Korean word lookups. It solves the language ambiguity and complex conjugations that make Korean difficult for beginners. By combining a local offline termbank engine (supporting Yomitan / KRDICT imports), the native C++ **Kiwi** WebAssembly morphological analyzer, neural KoELECTRA candidate reranking, and an optional Multilingual E5 cross-lingual sense disambiguation model, Munmek provides accurate dictionary headwords and definitions. When combined mit [asbplayer](https://github.com/asbplayer/asbplayer), it also features automated video subtitle extraction (Netflix, YouTube) and 1-click AnkiConnect flashcard exports.
 
 > [!NOTE]
-> In its current vibe-coded state, this extension serves as a **proof of concept**. It is actively developed to explore high-performance offline Korean NLP in the browser.
-> If you are looking for mature commercial tools, [Kimchi Reader](https://kimchi-reader.app/) and [Migaku](https://migaku.com/) are polished alternatives.
+> In its current vibe-coded state, this extension serves as a **proof of concept**.
+> If you are looking for more mature commercial tools, [Kimchi Reader](https://kimchi-reader.app/) and [Migaku](https://migaku.com/) are polished alternatives.
 > Credits for the inspiring [blog post](https://kimchi-reader.app/blog/int8-cpu-korean-disambiguation) regarding the KoELECTRA INT8 Reranker go to Kimchi Reader's developer @Alanoor.
 
 ---
@@ -73,7 +73,7 @@
 - **Automatic Language Detection**: Munmek detects the target language directly from the active dictionary tab (no manual settings dropdown required). `✨ LLM Matched` badges only attach to dictionary entries that match the language of the LLM response.
 
 ### 🎬 Site-Aware Media Context (Netflix & YouTube)
-- **Netflix Direct Synopsis & Metadata**: Scrapes show titles, episode numbers, and direct plot synopsis straight from Netflix's DOM and media session metadata. Uses TMDB only as a secondary fallback with strict cache pollution guards.
+- **Netflix Direct Synopsis & Metadata**: Optionally uses TMDB to fetch details about the episode for more context.
 - **YouTube In-Browser Transcript Parsing**: Extracts video details and caption tracks (JSON3/XML) directly in the browser without external dependencies like `yt-dlp`.
 - **Token-Efficient Context Summarization**: Summarizes active scene context into a concise overview (~50 tokens) and injects it into LLM prompts for grounded explanations.
 
@@ -88,11 +88,12 @@
 
 ### 1. Prerequisites
 - **Browser**: Google Chrome, Brave, Microsoft Edge, or any Chromium-based browser.
+- **asbplayer**: Browser Extension that provides highlightable and selectable Subtitles with Youtube, Netflix and more. Install it from the [Chrome Store](https://chromewebstore.google.com/detail/asbplayer-language-learni/hkledmpjpaehamkiehglnbelcpdflcab) or [Github](https://github.com/asbplayer/asbplayer). Highly recommended and **essential** for the anki card creation flow!
 - **Anki Desktop** *(Optional, for card export)*: Anki running with the [AnkiConnect Add-on](https://ankiweb.net/shared/info/2055492159) (Code: `2055492159`).
 - **AI Backend** *(Optional, for LLM explanations)*:
   - **Local AI / Custom Endpoint**: Run LM Studio (`http://localhost:1234/v1`), Ollama (`http://localhost:11434/v1`), llama.cpp server (`http://127.0.0.1:8080/v1`), or any OpenAI-compatible server. Completely private and offline. For responsible usage I recommend this option if you have the hardware to run a small LLM fast enough. A 2GB VRAM GPU should be enough to run a small and fast model like Gemma4
   - **Google Gemini**: Get a free API key from [Google AI Studio](https://aistudio.google.com/apikey).
-- **asbplayer**: Browser Extension that provides highlightable and selectable Subtitles with Youtube, Netflix and more. Install it from the [Chrome Store](https://chromewebstore.google.com/detail/asbplayer-language-learni/hkledmpjpaehamkiehglnbelcpdflcab) or [Github](https://github.com/asbplayer/asbplayer). Highly recommended and essential for the anki card creation flow!
+- **TMDB API Key** *(Optional)*: for optionally fetching Episode Context on Netflix.
 
 ### 2. Installing the Extension
 1. Clone or download this repository:
@@ -113,7 +114,7 @@ Right-click the Munmek toolbar icon and select **Options** (or open `src/options
    - Download Yomitan-format KRDICT `.zip` archives (e.g., `KO-EN.KRDICT.No.Examples.zip`, `KO-JA.KRDICT.zip`). Compatible dictionaries are available [here](https://github.com/Lyroxide/yomitan-ko-dic/releases).
    - In Munmek Settings, click **Import Term Bank / Zip** and select the file.
    - Adjust priority order using **▲ Up** and **▼ Down** buttons.
-2. **AI Backend Setup**:
+2. **LLM Backend Setup**:
    - Select **Custom OpenAI-Compatible Endpoint** (default: `http://localhost:1234/v1`) or **Google Gemini**.
    - Enter your model ID and API key (if required), then click **Test AI Connection**.
 3. **AnkiConnect Setup**:
@@ -154,7 +155,7 @@ Precomputing definition vectors locally using your GPU accelerates Stage 2 sense
   - **"▶ Start with Context"**: Activates hover lookups and automatically extracts/summarizes video subtitles, Netflix synopses, or page text.
   - **"⚡ Start (No Context)"**: Activates instant hover lookups without loading page context.
   - Active tabs display an **ON** badge on the extension icon.
-- (Recommended for Youtube/Netflix:) **Start asbplayer**: Select the Tab playing the video with asbplayer to display selectable korean subtitles.
+- (On Youtube/Netflix:) **Start [asbplayer](https://github.com/asbplayer/asbplayer)**: Select the Tab playing the video with asbplayer to display selectable korean subtitles.
 - **Hover Lookup**: Hold `Shift` (configurable) and hover over any Korean word on web pages or video subtitles (Netflix, YouTube, ASBPlayer).
 - **Switch Candidates**: Click candidate chips in the tooltip (e.g. `[듣다]`, `[들다]`, `[동사]`, `[명사]`) to inspect alternative base forms or related sub-verbs.
 - **Ask LLM**: Click `✨ Ask LLM` inside the tooltip for deep grammatical breakdowns and scene-grounded explanations in the language of the active dictionary.
