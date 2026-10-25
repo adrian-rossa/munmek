@@ -1752,15 +1752,24 @@
     } catch (_) {}
   }
 
-  function parseNetflixTitleString(rawTitle) {
-    let cleanDoc = String(rawTitle || '')
-      .replace(/[„“”"']/g, '')
-      .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
-      .replace(/\s*[\|\-·]\s*(?:Netflix|넷플릭스).*$/i, '')
-      .replace(/^(?:Watch|시청하기|Ansehen|Anschauen)\s+/i, '')
-      .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
+  function cleanNetflixTitleString(rawTitle) {
+    if (!rawTitle) return '';
+    return String(rawTitle)
+      // 1. Strip typographical quotes across locales
+      .replace(/[„“”"''「」『』«»]/g, '')
+      // 2. Strip trailing Netflix brand suffixes across languages
+      .replace(/\s*[\|\-·:]\s*(?:Netflix|넷플릭스|ネットフリックス|网飞).*$/i, '')
+      // 3. Strip leading action verbs in EN, KO, DE, ES, FR, PT, IT
+      .replace(/^(?:Watch|시청하기|다시보기|Ansehen|Anschauen|Ver|Regarder|Assistir(?:\s+a)?|Guarda)\s+/i, '')
+      // 4. Strip trailing streaming/action verbs across locales
+      .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch|ver online|ver en línea|ver|regarder en ligne|regarder|assistir online|assistir|guarda online|guarda|オンラインで見る|をオンラインで見る|視聴する|を視聴する|시청하기|다시보기)\s*$/i, '')
+      // 5. Strip trailing delimiters and whitespace
       .replace(/\s*[\|\-·:]+\s*$/g, '')
       .trim();
+  }
+
+  function parseNetflixTitleString(rawTitle) {
+    let cleanDoc = cleanNetflixTitleString(rawTitle);
 
     const isGeneric = !cleanDoc ||
       /^netflix$/i.test(cleanDoc) ||

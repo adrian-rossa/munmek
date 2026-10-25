@@ -34,20 +34,24 @@ Analyze the Korean word '{WORD}'.
 {CANDIDATE_LINE}
 
 Rules:
-1. If '{WORD}' is a person's name or proper noun in context (e.g. before ~이에요/~예요/~야/~아/~씨/~님), set "pos": "proper noun" and definition to the name rather than forcing a dictionary homonym.
-2. For "base", provide ONLY the clean Korean dictionary citation form (e.g. "부르다", NOT "부르다 (to call)"). Do not include English glosses, notes, or parentheses in "base".
-3. Disambiguate short homonyms (e.g., 차 [tea vs car], 배 [boat vs belly vs pear], 말 [speech vs horse], 눈 [eye vs snow]) strictly using immediate collocations (e.g., 한잔/마시다 -> tea; 타다/운전하다 -> vehicle) and surrounding dialogue flow.
-4. In "conjugation", break down grammar in context: [Word] + [Ending] = [Meaning in this sentence]. Use sentence and dialogue context whenever relevant to explain the specific grammatical nuance or politeness level.
-5. If Preceding Dialogue Context is present, write 1-2 concise sentences in "dialogue_nuance" explaining the speaker's tone, attitude, or reaction to the dialogue. Omit if no dialogue context.
+1. If '{WORD}' is a name or proper noun in context, set "pos": "proper noun" and definition to the name.
+2. For "base", provide ONLY the clean Korean dictionary citation lemma (e.g. "부르다"). No English glosses or parentheses.
+3. Disambiguate short homonyms (e.g., 차 [tea vs car], 배 [boat vs belly vs pear], 말 [speech vs horse], 눈 [eye vs snow]) using collocations and surrounding dialogue.
+4. In "conjugation", break down grammar: [Base] + [Ending/Particle] = [Meaning in context].
+5. In "dialogue_nuance", when Preceding Dialogue Context is present:
+   - Trigger: State which preceding line or topic triggered this sentence (quote or cite it directly).
+   - Dynamics & Nuance: Explain how the speaker is reacting, their emotional state, and why this specific speech level (-요, -습니다, informal) or honorific is used in response.
+   Omit/leave empty if no dialogue context is provided.
+6. Keep "grammar_notes" empty unless there is a rare grammatical irregularity. Never repeat dialogue context or tone here.
 
 Return JSON with "words_analysis": [{
   "surface": "{WORD}",
-  "base": "clean Korean citation lemma without English gloss or parentheses (e.g. 부르다)",
+  "base": "clean Korean citation lemma (e.g. 부르다)",
   "pos": "part of speech",
   "definitions": ["definition in context"],
-  "conjugation": { "ending": "...", "explanation": "building-block grammar in context" },
-  "dialogue_nuance": "tone and reaction to preceding dialogue (1-2 sentences)",
-  "grammar_notes": "additional notes if needed",
+  "conjugation": { "ending": "...", "explanation": "[Base] + [Ending] = [Meaning in context]" },
+  "dialogue_nuance": "Trigger: [cite trigger line]. Nuance: [relationship, speech level dynamic, and intent].",
+  "grammar_notes": "",
   "id": "1"
 }]`;
 
@@ -56,7 +60,7 @@ const DEFAULT_AI_PROMPT_EXTENSION = `You are an expert Korean linguistic assista
 Rules:
 1. Break grammar down like simple math: [Word] + [Ending/Particle] = [Function/Meaning].
 2. Avoid complex linguistic terms. Use simple labels that explain the function and real meaning of the building blocks (e.g., "Topic Marker", "Direction Marker", "Connector").
-3. Explain grammar using the sentence context. When preceding dialogue is provided, also capture the conversational tone and reaction.
+3. When preceding dialogue is provided, ground the explanation in the conversational trigger and speech level dynamics (who is speaking to whom, and why this tone/politeness level is used).
 4. Keep bullets short and concise and avoid dense Western grammar jargon. Explain the language logically on its own terms.`;
 
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalled) {
@@ -1315,11 +1319,15 @@ function handleAnkiCardRequest(data, sendResponse) {
 function cleanNetflixTitleString(rawTitle) {
   if (!rawTitle) return '';
   return String(rawTitle)
-    .replace(/[„“”"']/g, '')
-    .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
-    .replace(/\s*[\|\-·]\s*(?:Netflix|넷플릭스).*$/i, '')
-    .replace(/^(?:Watch|시청하기|Ansehen|Anschauen)\s+/i, '')
-    .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch)\s*$/i, '')
+    // 1. Strip typographical quotes across locales
+    .replace(/[„“”"''「」『』«»]/g, '')
+    // 2. Strip trailing Netflix brand suffixes across languages
+    .replace(/\s*[\|\-·:]\s*(?:Netflix|넷플릭스|ネットフリックス|网飞).*$/i, '')
+    // 3. Strip leading action verbs in EN, KO, DE, ES, FR, PT, IT
+    .replace(/^(?:Watch|시청하기|다시보기|Ansehen|Anschauen|Ver|Regarder|Assistir(?:\s+a)?|Guarda)\s+/i, '')
+    // 4. Strip trailing streaming/action verbs across locales
+    .replace(/\s*(?:ansehen|anschauen|online ansehen|streamen|watch online|watch|ver online|ver en línea|ver|regarder en ligne|regarder|assistir online|assistir|guarda online|guarda|オンラインで見る|をオンラインで見る|視聴する|を視聴する|시청하기|다시보기)\s*$/i, '')
+    // 5. Strip trailing delimiters and whitespace
     .replace(/\s*[\|\-·:]+\s*$/g, '')
     .trim();
 }
@@ -1598,6 +1606,18 @@ async function resolveNetflixTmdbContext(netflixData, config) {
     hasTmdbApiKey: Boolean(tmdbApiKey)
   });
 
+  // Explicit Requirement: Netflix show & episode summaries strictly require TMDB
+  if (!tmdbApiKey) {
+    console.log('[Munmek Netflix] TMDB API key missing; Netflix scene & episode summaries require TMDB');
+    return {
+      title: title || 'Netflix Video',
+      rawText: '',
+      tmdbMatched: false,
+      noTmdbKey: true,
+      error: 'TMDB API key required'
+    };
+  }
+
   // 0a. If title is missing, generic, or "Netflix Video", try to fetch metadata from netflix.com/title/${netflixId}
   if ((!title || title === 'Netflix Video' || /^netflix$/i.test(title)) && netflixId) {
     try {
@@ -1707,38 +1727,9 @@ async function resolveNetflixTmdbContext(netflixData, config) {
     }
   }
 
-  // 2. Direct Netflix synopsis fallback (when no TMDB API key or TMDB had no match)
-  if (netflixData?.hasDirectSynopsis && netflixData?.synopsis) {
-    const parts = [];
-    const showTitle = title || 'Netflix Video';
-    const effectiveSeason = seasonNumber || (episodeNumber ? 1 : null);
-    const epHeader = (effectiveSeason && episodeNumber)
-      ? `Episode (S${effectiveSeason}E${episodeNumber}): ${netflixData.episodeTitle || ''}`
-      : (netflixData.episodeTitle ? `Episode: ${netflixData.episodeTitle}` : '');
-    if (epHeader) parts.push(epHeader);
-    if (netflixData.episodeSynopsis) {
-      parts.push(`Episode Synopsis: ${netflixData.episodeSynopsis}`);
-    }
-    if (netflixData.showSynopsis) {
-      parts.push(`Show Premise: ${netflixData.showSynopsis}`);
-    } else if (!netflixData.episodeSynopsis && netflixData.synopsis) {
-      parts.push(`Synopsis: ${netflixData.synopsis}`);
-    }
-    if (netflixData.subtitles) {
-      parts.push(`Recent Dialogue: ${netflixData.subtitles}`);
-    }
-    const resolved = {
-      title: `${showTitle}${effectiveSeason && episodeNumber ? ` S${effectiveSeason}E${episodeNumber}` : ''}`,
-      rawText: parts.join('\n\n'),
-      directSynopsisMatched: true
-    };
-    console.log('[Munmek Netflix] Resolved via direct Netflix synopsis fallback:', resolved);
-    return resolved;
-  }
-
   const fallback = {
     title: title || 'Netflix Video',
-    rawText: `${title || ''} ${netflixData?.synopsis ? `Synopsis: ${netflixData.synopsis}` : ''} ${netflixData?.subtitles || ''} ${netflixData?.pageDetails || ''}`.trim(),
+    rawText: `${title || ''} ${netflixData?.subtitles ? `Recent Dialogue: ${netflixData.subtitles}` : ''}`.trim(),
     tmdbMatched: false
   };
   console.log('[Munmek TMDB] Fallback without TMDB match:', fallback);
@@ -2176,8 +2167,13 @@ function handleFetchAndSummarizeContext(request, sender, sendResponse) {
         title = extractRes?.title || tabMeta.rawTitle || 'Webpage';
       }
 
-      // 2. Generate concise LLM summary
-      const summary = await summarizeMediaContext({ siteType, title, rawText }, config);
+      // 2. Generate concise LLM summary (skip LLM call if Netflix has no TMDB key configured)
+      let summary = '';
+      if (siteType === 'netflix' && noTmdbKey) {
+        summary = 'TMDB API Key Required: Netflix show & episode scene summaries require a free TMDB API key. Please configure your key in Extension Settings.';
+      } else {
+        summary = await summarizeMediaContext({ siteType, title, rawText }, config);
+      }
 
       // 3. Save to active tab contexts
       const contextObj = {

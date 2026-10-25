@@ -48,11 +48,42 @@ describe('Netflix Episode Extraction & Context Expansion Tests', () => {
       expect(parsed.showTitle).toBe('Avatar – Der Herr der Elemente');
     });
 
-    it('cleans quotes, streaming suffixes, and episode markers with cleanNetflixTitleString', () => {
+    it('cleans quotes, streaming suffixes, and episode markers with cleanNetflixTitleString across multiple languages', () => {
+      // German
       expect(bgScope.cleanNetflixTitleString('„Avatar – Der Herr der Elemente“ ansehen | Netflix')).toBe('Avatar – Der Herr der Elemente');
       expect(bgScope.cleanNetflixTitleString('"Squid Game" online ansehen | Netflix')).toBe('Squid Game');
+      // English
+      expect(bgScope.cleanNetflixTitleString('Watch Avatar: The Last Airbender | Netflix')).toBe('Avatar: The Last Airbender');
       expect(bgScope.cleanNetflixTitleString('Crash Landing on You | Watch online')).toBe('Crash Landing on You');
+      // Korean
       expect(bgScope.cleanNetflixTitleString('시청하기 더 글로리 | 넷플릭스')).toBe('더 글로리');
+      expect(bgScope.cleanNetflixTitleString('오징어 게임 다시보기 | 넷플릭스')).toBe('오징어 게임');
+      // Spanish
+      expect(bgScope.cleanNetflixTitleString('Ver La casa de papel | Netflix')).toBe('La casa de papel');
+      expect(bgScope.cleanNetflixTitleString('Elite ver online | Netflix')).toBe('Elite');
+      // French
+      expect(bgScope.cleanNetflixTitleString('Regarder Lupin | Netflix')).toBe('Lupin');
+      expect(bgScope.cleanNetflixTitleString('Dix pour cent regarder en ligne | Netflix')).toBe('Dix pour cent');
+      // Portuguese
+      expect(bgScope.cleanNetflixTitleString('Assistir a Sintonia | Netflix')).toBe('Sintonia');
+      expect(bgScope.cleanNetflixTitleString('3% assistir online | Netflix')).toBe('3%');
+      // Italian
+      expect(bgScope.cleanNetflixTitleString('Guarda Suburra | Netflix')).toBe('Suburra');
+      // Japanese
+      expect(bgScope.cleanNetflixTitleString('『今際の国のアリス』をオンラインで見る | Netflix')).toBe('今際の国のアリス');
+    });
+
+    it('returns noTmdbKey: true and skips fallback synopsis when tmdbApiKey is missing', async () => {
+      const netflixData = {
+        title: 'Avatar – Der Herr der Elemente',
+        netflixId: '70116062',
+        seasonNumber: 1,
+        episodeNumber: 3
+      };
+      const resolved = await bgScope.resolveNetflixTmdbContext(netflixData, { tmdbApiKey: '' });
+      expect(resolved.noTmdbKey).toBe(true);
+      expect(resolved.tmdbMatched).toBe(false);
+      expect(resolved.rawText).toBe('');
     });
 
     it('cleans quotes, streaming suffixes, and episode tags in searchTmdbShowOrMovie before query', async () => {
@@ -223,14 +254,16 @@ describe('Netflix Episode Extraction & Context Expansion Tests', () => {
   describe('2. Prompt Upgrades & Homonym Disambiguation', () => {
     it('includes homonym disambiguation rule in DEFAULT_PROMPT', () => {
       expect(bgScope.DEFAULT_PROMPT).toContain('Disambiguate short homonyms (e.g., 차 [tea vs car]');
-      expect(bgScope.DEFAULT_PROMPT).toContain('collocations (e.g., 한잔/마시다 -> tea; 타다/운전하다 -> vehicle)');
+      expect(bgScope.DEFAULT_PROMPT).toContain('using collocations and surrounding dialogue');
     });
 
     it('includes context-grounded grammar and dialogue nuance rules in DEFAULT_PROMPT', () => {
-      expect(bgScope.DEFAULT_PROMPT).toContain('In "conjugation", break down grammar in context: [Word] + [Ending] = [Meaning in this sentence]');
-      expect(bgScope.DEFAULT_PROMPT).toContain('Use sentence and dialogue context whenever relevant');
-      expect(bgScope.DEFAULT_PROMPT).toContain('dialogue_nuance');
-      expect(bgScope.DEFAULT_PROMPT).toContain('"dialogue_nuance": "tone and reaction to preceding dialogue (1-2 sentences)"');
+      expect(bgScope.DEFAULT_PROMPT).toContain('In "conjugation", break down grammar: [Base] + [Ending/Particle] = [Meaning in context]');
+      expect(bgScope.DEFAULT_PROMPT).toContain('In "dialogue_nuance", when Preceding Dialogue Context is present');
+      expect(bgScope.DEFAULT_PROMPT).toContain('Trigger: State which preceding line or topic triggered this sentence');
+      expect(bgScope.DEFAULT_PROMPT).toContain('Dynamics & Nuance: Explain how the speaker is reacting');
+      expect(bgScope.DEFAULT_PROMPT).toContain('"dialogue_nuance": "Trigger: [cite trigger line]. Nuance: [relationship, speech level dynamic, and intent]."');
+      expect(bgScope.DEFAULT_PROMPT).toContain('Keep "grammar_notes" empty unless there is a rare grammatical irregularity');
     });
 
     it('formats dialogue context in chronological order in handleSentenceAnalysisRequest', async () => {
@@ -416,12 +449,12 @@ describe('Netflix Episode Extraction & Context Expansion Tests', () => {
       const state = { word: '키우냐' };
       const html = MunmekUI.renderAnalysisSection(rawAnalysis, state);
 
-      expect(html).toContain('Context & Tone:');
+      expect(html).toContain('Dialogue & Context:');
       expect(html).toContain('Sarcastic and humorous question to Sokka');
       expect(html).toContain('Grammar:');
       expect(html).toContain('Ending <code>냐</code> — Informal interrogative ending');
-      // Must not duplicate as Context Note
-      expect(html).not.toContain('Context Note:');
+      // Must not duplicate as Grammar Notes
+      expect(html).not.toContain('Grammar Notes:');
     });
   });
 

@@ -1249,13 +1249,13 @@
 
           ${targetItem.dialogue_nuance || targetItem.dialogueNuance
             ? `<div style="font-size: 0.82em; color: #214144; margin-top: 6px; background: #eaf4f2; padding: 6px 10px; border-radius: 8px; border-left: 3px solid #2f5d62; line-height: 1.45;">
-                <strong style="color: #2f5d62;">Context & Tone:</strong> ${escapeHtml(targetItem.dialogue_nuance || targetItem.dialogueNuance)}
+                <strong style="color: #2f5d62;">Dialogue & Context:</strong> ${escapeHtml(targetItem.dialogue_nuance || targetItem.dialogueNuance)}
                </div>`
             : ''}
 
           ${notes && notes !== (targetItem.dialogue_nuance || targetItem.dialogueNuance)
             ? `<div style="font-size: 0.82em; color: #4f463a; margin-top: 6px; font-style: italic; background: #fff; padding: 6px 10px; border-radius: 8px; border: 1px solid #eadfce;">
-                <strong>Context Note:</strong> ${escapeHtml(notes)}
+                <strong>Grammar Notes:</strong> ${escapeHtml(notes)}
                </div>`
             : ''}
 

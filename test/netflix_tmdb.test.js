@@ -143,7 +143,7 @@ describe('Netflix & TMDB Context Resolution', () => {
       vi.restoreAllMocks();
     });
 
-    it('uses direct Netflix synopsis fallback when TMDB key is not configured', async () => {
+    it('requires TMDB API key when tmdbApiKey is missing and returns noTmdbKey: true', async () => {
       const netflixData = {
         title: 'Gokusen',
         netflixId: '80012345',
@@ -156,11 +156,9 @@ describe('Netflix & TMDB Context Resolution', () => {
       };
 
       const res = await resolveNetflixTmdbContext(netflixData, { tmdbApiKey: '' });
-      expect(res.directSynopsisMatched).toBe(true);
-      expect(res.title).toBe('Gokusen S1E1');
-      expect(res.rawText).toContain('Synopsis: A young teacher joins Shirokin High School.');
-      expect(res.rawText).toContain('Episode (S1E1): Episode 1');
-      expect(res.rawText).toContain('Recent Dialogue: 선생님 오셨어요.');
+      expect(res.noTmdbKey).toBe(true);
+      expect(res.tmdbMatched).toBe(false);
+      expect(res.rawText).toBe('');
     });
 
     it('prioritizes TMDB for show premise and episode plot when TMDB key is configured', async () => {
@@ -214,7 +212,7 @@ describe('Netflix & TMDB Context Resolution', () => {
       expect(res.rawText).toContain('Recent Dialogue: 절대 전함을 따라잡을 수 없어.');
     });
 
-    it('recovers title and synopsis by fetching netflix.com/title when title is initially missing', async () => {
+    it('recovers title from netflix.com/title when title is initially missing and resolves with TMDB', async () => {
       const netflixHtml = `
         <html>
           <head>
@@ -236,6 +234,26 @@ describe('Netflix & TMDB Context Resolution', () => {
             text: () => Promise.resolve(netflixHtml)
           });
         }
+        if (url.includes('search/multi') || url.includes('search/tv')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              results: [{ id: 5555, name: 'Gokusen', media_type: 'tv' }]
+            })
+          });
+        }
+        if (url.includes('/tv/5555/season/1/episode/1')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ name: 'Class 3D', overview: 'Yamaguchi arrives.' })
+          });
+        }
+        if (url.includes('/tv/5555')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ name: 'Gokusen', overview: 'Kumiko becomes a teacher.' })
+          });
+        }
         return Promise.reject(new Error('Unknown URL: ' + url));
       });
 
@@ -246,10 +264,11 @@ describe('Netflix & TMDB Context Resolution', () => {
         episodeNumber: 1
       };
 
-      const res = await resolveNetflixTmdbContext(netflixData, { tmdbApiKey: '' });
-      expect(res.directSynopsisMatched).toBe(true);
-      expect(res.title).toBe('Gokusen S1E1');
-      expect(res.rawText).toContain('Synopsis: Kumiko Yamaguchi becomes a teacher.');
+      const res = await resolveNetflixTmdbContext(netflixData, { tmdbApiKey: 'tmdb_secret' });
+      expect(res.tmdbMatched).toBe(true);
+      expect(res.title).toContain('Gokusen S1E1');
+      expect(res.rawText).toContain('Episode (S1E1 - Class 3D): Yamaguchi arrives.');
+      expect(res.rawText).toContain('Show Premise: Kumiko becomes a teacher.');
     });
   });
 

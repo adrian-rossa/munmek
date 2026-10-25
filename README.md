@@ -260,7 +260,7 @@ munmek/
 │   ├── models/                # KoELECTRA INT8 ONNX, Multilingual E5 INT8 ONNX & vocab
 │   ├── onnx/                  # ONNXRuntime-Web engine & WordPiece tokenizer
 │   └── jszip.min.js           # ZIP extraction library for termbank imports
-└── test/                      # Vitest automated test suite (201 passing unit tests across 17 files)
+└── test/                      # Vitest automated test suite (254 passing unit tests across 20 files)
 ```
 
 ---
@@ -282,9 +282,9 @@ The test suite covers:
 - **Rule-Based Morpheme De-Stacker**: Hangul Jamo math, particle stripping, and ending deconjugations (`test/korean_lemmatizer.test.js`, `test/korean_lemmatizer_negative.test.js`).
 - **Tooltip DOM Engine**: Single adaptive Ask/Refresh button, multi-dictionary language routing, ruby furigana rendering, HTML entity decoding, and Anki feedback (`test/content_ui.test.js`).
 - **IndexedDB Termbanks**: Multi-dictionary priority queries and vector caching (`test/dictionary_db.test.js`).
-- **Neural Disambiguation**: Stage 1 KoELECTRA candidate ranking and Stage 2 Multilingual E5 sense reranking (`test/koelectra_reranker.test.js`, `test/two_stage_neural_pipeline.test.js`, `test/synthetic_nlp_eval.test.js`).
-- **Ask LLM & Candidate Disambiguation**: False slice hallucination defense, small LLM prompt anchoring, compound word pair detection, and linked candidate pill rendering (`test/ask_llm_fixes.test.js`).
-- **Netflix & TMDB Context**: Direct synopsis extraction, TMDB search fallbacks, and anti-cache pollution safeguards (`test/netflix_tmdb.test.js`, `test/site_context_and_session.test.js`).
+- **Neural Disambiguation**: Stage 1 KoELECTRA candidate ranking and Stage 2 Multilingual E5 sense reranking (`test/koelectra_reranker.test.js`, `test/two_stage_neural_pipeline.test.js`, `test/synthetic_nlp_eval.test.js`, `test/sense_reranker_adapters.test.js`).
+- **Ask LLM & Dialogue Context Grounding**: Context-grounded grammar, dialogue triggers, speech level dynamics, homonym disambiguation, and false slice hallucination defense (`test/ask_llm_fixes.test.js`, `test/netflix_and_context_expansion.test.js`).
+- **Netflix, YouTube & TMDB Context**: Multi-line subtitle windowing, TMDB episode plot resolution, multilingual title sanitization across 8 languages, and anti-cache pollution safeguards (`test/netflix_tmdb.test.js`, `test/netflix_and_context_expansion.test.js`, `test/site_context_and_session.test.js`).
 - **AI & AnkiConnect**: JSON schema parsing, dynamic custom prompt fields, and note template rendering (`test/custom_endpoint.test.js`, `test/custom_fields.test.js`, `test/background_template.test.js`).
 
 ---
